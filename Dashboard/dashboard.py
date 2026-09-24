@@ -2,6 +2,7 @@ import warnings
 from pathlib import Path
 
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 warnings.filterwarnings("ignore")
@@ -181,6 +182,49 @@ def certs_report_html(df: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp, 
     return "".join(head) + "".join(body) + "</tbody></table></div>"
 
 
+PORT_COLORS = {
+    "ANT": NAVY, "LON": TEAL, "TRI": AMBER, "FEL": "#6b7fb5", "AMS": "#9b6bb3", "ROT": "#c94a4a",
+    "HAM": "#1f9d6f", "BAR": "#c0722c", "BRE": "#4a5578", "GEN": "#8fa3d1", "LIV": "#b58f4a", "NOR": GREY,
+}
+
+
+def chart_layout(fig, title, height=340):
+    fig.update_layout(
+        template="plotly_white", height=height, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#1a1a2e", size=12),
+        title=dict(text=title, font=dict(size=14, color=NAVY), x=0, xanchor="left"),
+        margin=dict(t=44, b=24, l=8, r=8), hovermode="x unified",
+        legend=dict(orientation="h", y=1.02, x=1, xanchor="right", yanchor="bottom",
+                    bgcolor="rgba(0,0,0,0)", font=dict(size=11)),
+        xaxis=dict(gridcolor="rgba(10,36,99,0.06)", color="#4a5578", showline=True, linecolor="#dfe3ee"),
+        yaxis=dict(gridcolor="rgba(10,36,99,0.08)", color="#4a5578", tickformat=",", zeroline=False),
+    )
+    return fig
+
+
+def total_certs_fig(df: pd.DataFrame, grade: str = "VG") -> go.Figure:
+    s = df[["Date", f"LRC-TOT-{grade}"]].dropna()
+    fig = go.Figure(go.Scatter(
+        x=s["Date"], y=s[f"LRC-TOT-{grade}"], mode="lines", name="Total certs",
+        line=dict(color=NAVY, width=2), fill="tozeroy", fillcolor="rgba(10,36,99,0.07)",
+        hovertemplate="%{y:,.0f} bags<extra></extra>"))
+    return chart_layout(fig, "Total Certs (bags)")
+
+
+def ports_certs_fig(df: pd.DataFrame, grade: str = "VG") -> go.Figure:
+    fig = go.Figure()
+    for p in PORT_ORDER:
+        c = f"LRC-{p}-{grade}"
+        s = df[["Date", c]].dropna()
+        if s[c].abs().sum() == 0:
+            continue
+        fig.add_trace(go.Scatter(
+            x=s["Date"], y=s[c], mode="lines", name=p,
+            line=dict(color=PORT_COLORS.get(p, GREY), width=1.8),
+            hovertemplate="%{y:,.0f}<extra>" + p + "</extra>"))
+    return chart_layout(fig, "Certs Per Port (bags)")
+
+
 with st.sidebar:
     st.markdown("<div class='sb-title'>Daily Miner</div>", unsafe_allow_html=True)
     st.markdown("<div class='sb-label'>Commodity</div>", unsafe_allow_html=True)
@@ -195,3 +239,8 @@ if commodity == "Coffee":
             end = certs["Date"].max()
             start = end - pd.DateOffset(years=HISTORY_YEARS)
             st.markdown(certs_report_html(certs, start, end), unsafe_allow_html=True)
+            ch1, ch2 = st.columns(2)
+            with ch1:
+                st.plotly_chart(total_certs_fig(certs), use_container_width=True, config={"displayModeBar": False})
+            with ch2:
+                st.plotly_chart(ports_certs_fig(certs), use_container_width=True, config={"displayModeBar": False})
