@@ -642,36 +642,21 @@ def grading_table_html(g: pd.DataFrame, height: str = "60vh") -> str:
 
 
 def grading_bar_fig(view: pd.DataFrame, col: str, title: str, order: list, colors: dict,
-                    labels: dict | None = None, height: int = 340, hi: set | None = None) -> go.Figure:
-    """Lots graded per panel date, stacked by `col` (category axis: only panel dates are shown).
-    hi = origins picked in the Per Origin chart: every bar is split into the picked origins
-    (full colour) and the rest (faded), so their share in this chart stands out."""
+                    labels: dict | None = None, height: int = 340) -> go.Figure:
+    """Lots graded per panel date, stacked by `col` (category axis: only panel dates are shown)."""
     fig = go.Figure()
     if view.empty:
         return chart_layout(fig, title, height)
     dates = sorted(view["PanelDate"].unique())
     xs = pd.DatetimeIndex(dates).strftime("%d/%m/%y")
-
-    def series(df, key):
-        v = df[df[col] == key].groupby("PanelDate")["NoLots"].sum()
-        return v.reindex(dates, fill_value=0).values
-
     for key in order:
-        if not (view[col] == key).any():
+        sub = view[view[col] == key]
+        if sub.empty:
             continue
         name = (labels or {}).get(key, key)
-        if hi:
-            sel = view[view["OriginName"].isin(hi)]
-            oth = view[~view["OriginName"].isin(hi)]
-            fig.add_trace(go.Bar(x=xs, y=series(sel, key), name=name, legendgroup=name,
-                                 marker_color=colors.get(key, GREY),
-                                 hovertemplate="%{y:,.0f}<extra>" + name + " (picked)</extra>"))
-            fig.add_trace(go.Bar(x=xs, y=series(oth, key), name=name, legendgroup=name, showlegend=False,
-                                 marker=dict(color=colors.get(key, GREY), opacity=0.2),
-                                 hovertemplate="%{y:,.0f}<extra>" + name + " (other)</extra>"))
-        else:
-            fig.add_trace(go.Bar(x=xs, y=series(view, key), name=name, marker_color=colors.get(key, GREY),
-                                 customdata=[key] * len(xs), hovertemplate="%{y:,.0f}<extra>" + name + "</extra>"))
+        y = sub.groupby("PanelDate")["NoLots"].sum().reindex(dates, fill_value=0).values
+        fig.add_trace(go.Bar(x=xs, y=y, name=name, marker_color=colors.get(key, GREY),
+                             hovertemplate="%{y:,.0f}<extra>" + name + "</extra>"))
     total = view.groupby("PanelDate")["NoLots"].sum().reindex(dates, fill_value=0)
     if len(dates) <= 70:
         fig.add_trace(go.Scatter(x=xs, y=total.values, mode="text", text=[f"{int(v):,}" for v in total.values],
@@ -687,49 +672,81 @@ def grading_bar_fig(view: pd.DataFrame, col: str, title: str, order: list, color
     return fig
 
 
-def picked_origins(event, names: list) -> set:
-    """Origins behind the bar segments clicked in the Per Origin chart."""
-    picked = set()
-    try:
-        points = event.selection.points
-    except Exception:
-        return picked
-    for pt in points or []:
-        cd = pt.get("customdata")
-        if isinstance(cd, (list, tuple)):
-            cd = cd[0] if cd else None
-        if isinstance(cd, str):
-            picked.add(cd)
-        elif pt.get("curve_number") is not None and pt["curve_number"] < len(names):
-            picked.add(names[pt["curve_number"]])
-    return picked
+MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+MONTH_DAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
 
 
-def grading_cumulative(g: pd.DataFrame) -> pd.DataFrame:
-    """Daily year-to-date cumulative lots graded (resets every 1 Jan) as a Date/lots frame."""
-    s = g.groupby("PanelDate")["NoLots"].sum()
-    idx = pd.date_range(pd.Timestamp(year=s.index.min().year, month=1, day=1), s.index.max())
+def crop_label(yr: int, m: int) -> str:
+    """Calendar year when the crop year starts in January, otherwise e.g. 25/26."""
+    return str(yr) if m == 1 else f"{yr % 100:02d}/{(yr + 1) % 100:02d}"
+
+
+def crop_seasonality_fig(g_sel: pd.DataFrame, title: str, m: int, first: pd.Timestamp, last: pd.Timestamp,
+                         height: int = 360) -> go.Figure:
+    """Cumulative lots graded through the crop year (resets on the 1st of month m), history bands from
+    past crop years, previous crop year in red, current one in navy. Crop years that began before the
+    data did are skipped so no partial year distorts the bands."""
+    fig = go.Figure()
+    s = g_sel.groupby("PanelDate")["NoLots"].sum()
+    first_cy = first.year if first.month >= m else first.year - 1
+    start0 = pd.Timestamp(year=first_cy, month=m, day=1)
+    if (first - start0).days > 45:
+        first_cy += 1
+        start0 = pd.Timestamp(year=first_cy, month=m, day=1)
+    idx = pd.date_range(start0, last)
     daily = s.reindex(idx, fill_value=0)
-    cum = daily.groupby(daily.index.year).cumsum()
-    return pd.DataFrame({"Date": cum.index, "lots": cum.values.astype(float)})
+    cy = np.where(idx.month >= m, idx.year, idx.year - 1)
+    cum = daily.groupby(cy).cumsum()
+    starts = pd.to_datetime([f"{y}-{m:02d}-01" for y in cy])
+    w = pd.DataFrame({"v": cum.values.astype(float), "x": (idx - starts).days + 1, "yr": cy}, index=idx)
+    w = w[w["x"] <= 365]
+    cur = int(w["yr"].max())
+    hist = w[w["yr"] < cur]
+    if not hist.empty:
+        band = hist.groupby("x")["v"].agg(
+            lo="min", p10=lambda v: v.quantile(0.10), p25=lambda v: v.quantile(0.25), avg="mean",
+            p75=lambda v: v.quantile(0.75), p90=lambda v: v.quantile(0.90), hi="max").sort_index()
+        for lo, hi, color in [("lo", "hi", "rgba(31,138,156,0.08)"), ("p10", "p90", "rgba(31,138,156,0.16)"),
+                              ("p25", "p75", "rgba(31,138,156,0.28)")]:
+            fig.add_trace(go.Scatter(x=band.index, y=band[hi], line=dict(width=0), showlegend=False, hoverinfo="skip"))
+            fig.add_trace(go.Scatter(x=band.index, y=band[lo], fill="tonexty", fillcolor=color, line=dict(width=0),
+                                     showlegend=False, hoverinfo="skip"))
+        fig.add_trace(go.Scatter(x=band.index, y=band["avg"], mode="lines", name="Average",
+                                 line=dict(color="#4a5578", width=1.5, dash="dot"),
+                                 hovertemplate="%{y:,.0f}<extra>Avg</extra>"))
+    for yr, color, width in [(cur - 1, RED, 2), (cur, NAVY, 3)]:
+        gg = w[w["yr"] == yr].sort_values("x")
+        if not gg.empty:
+            lbl = crop_label(yr, m)
+            fig.add_trace(go.Scatter(x=gg["x"], y=gg["v"], mode="lines", name=lbl, line=dict(color=color, width=width),
+                                     hovertemplate="%{y:,.0f}<extra>" + lbl + "</extra>"))
+    order = [(m - 1 + i) % 12 for i in range(12)]
+    offs = np.concatenate([[0], np.cumsum([MONTH_DAYS[k] for k in order])])[:12] + 1
+    chart_layout(fig, title, height)
+    fig.update_layout(xaxis=dict(tickmode="array", tickvals=list(offs[::2]),
+                                 ticktext=[MONTH_ABBR[order[i]] for i in range(0, 12, 2)], range=[1, 365]),
+                      legend=dict(font=dict(size=10)))
+    return fig
 
 
-def monthly_lots_html(g: pd.DataFrame) -> str:
-    """Year x month lots graded with in-cell bars and a YEAR total."""
+def monthly_lots_html(g: pd.DataFrame, m: int = 1) -> str:
+    """Crop year x month lots graded (columns start at month m) with in-cell bars and a crop-year total."""
     s = g.groupby("PanelDate")["NoLots"].sum()
-    tbl = s.groupby([s.index.year, s.index.month]).sum().unstack().reindex(columns=range(1, 13))
-    first, last = s.index.min(), s.index.max()
+    if s.empty:
+        return "<div class='rwrap' style='padding:14px'>No lots.</div>"
+    cyear = np.where(s.index.month >= m, s.index.year, s.index.year - 1)
+    months = [(m - 1 + i) % 12 + 1 for i in range(12)]
+    tbl = s.groupby([cyear, s.index.month]).sum().unstack().reindex(columns=months)
+    first, last = g["PanelDate"].min(), g["PanelDate"].max()
     for yr in tbl.index:
-        for m in range(1, 13):
-            before_start = (yr, m) < (first.year, first.month)
-            after_end = (yr, m) > (last.year, last.month)
-            if before_start or after_end:
-                tbl.loc[yr, m] = np.nan
-            elif pd.isna(tbl.loc[yr, m]):
-                tbl.loc[yr, m] = 0
+        for mo in months:
+            cal_year = yr if (m == 1 or mo >= m) else yr + 1
+            if (cal_year, mo) < (first.year, first.month) or (cal_year, mo) > (last.year, last.month):
+                tbl.loc[yr, mo] = np.nan
+            elif pd.isna(tbl.loc[yr, mo]):
+                tbl.loc[yr, mo] = 0
     year_tot = tbl.sum(axis=1, min_count=1)
     scale, yscale = max(tbl.max().max(), 1), max(year_tot.max(), 1)
-    months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
 
     def cell(v, sc, cls="cbl"):
         if pd.isna(v):
@@ -738,10 +755,11 @@ def monthly_lots_html(g: pd.DataFrame) -> str:
         bar = f"<i style='width:{v / sc * 100:.1f}%'></i>" if v else ""
         return f"<td class='{cls}'>{bar}<span>{v:,}</span></td>"
 
-    out = ["<div class='rwrap' style='height:auto'><table class='rpt mx'><thead><tr class='h2'><th class='dt'>Year</th>"]
-    out += [f"<th>{m}</th>" for m in months] + ["<th class='sep'>Year</th></tr></thead><tbody>"]
+    out = ["<div class='rwrap' style='height:auto'><table class='rpt mx'><thead><tr class='h2'>"
+           f"<th class='dt'>{'Year' if m == 1 else 'Crop yr'}</th>"]
+    out += [f"<th>{MONTH_ABBR[mo - 1].upper()}</th>" for mo in months] + ["<th class='sep'>Total</th></tr></thead><tbody>"]
     for yr in tbl.index:
-        row = [f"<tr><td class='d'>{yr}</td>"] + [cell(tbl.loc[yr, m], scale) for m in range(1, 13)]
+        row = [f"<tr><td class='d'>{crop_label(int(yr), m)}</td>"] + [cell(tbl.loc[yr, mo], scale) for mo in months]
         row.append(cell(year_tot[yr], yscale, "cbl sep"))
         row.append("</tr>")
         out.append("".join(row))
@@ -870,47 +888,54 @@ if commodity == "Coffee":
                     gs_, ge_ = g_max - pd.DateOffset(months={"3M": 3, "6M": 6, "1Y": 12}[g_span]), g_max
                 gview = gr[(gr["PanelDate"] >= gs_) & (gr["PanelDate"] <= ge_)]
                 o_order, o_colors = grading_origin_palette(gr)
-                names_present = [k for k in o_order if (gview["OriginName"] == k).any()]
-                ver = st.session_state.get("rg_sel_ver", 0)
-                if st.session_state.get("rg_hi_active"):
-                    if st.button("Clear highlight", key="rg_clear"):
-                        st.session_state["rg_sel_ver"] = ver = ver + 1
-                        st.session_state["rg_hi_active"] = False
-                ev = st.plotly_chart(grading_bar_fig(gview, "OriginName", "Daily Gradings in Lots | Per Origin",
-                                                     o_order, o_colors),
-                                     width="stretch", config=gcfg, key=f"rg_origin_chart_{ver}",
-                                     on_select="rerun", selection_mode="points")
-                hi = picked_origins(ev, names_present)
-                st.session_state["rg_hi_active"] = bool(hi)
+                st.plotly_chart(grading_bar_fig(gview, "OriginName", "Daily Gradings in Lots | Per Origin",
+                                                o_order, o_colors), width="stretch", config=gcfg)
                 st.plotly_chart(grading_bar_fig(gview, "Class", "Daily Gradings in Lots | Per Class",
-                                                GRADING_CLASS_ORDER, GRADING_CLASS_COLORS, GRADING_CLASS_LABEL, hi=hi),
+                                                GRADING_CLASS_ORDER, GRADING_CLASS_COLORS, GRADING_CLASS_LABEL),
                                 width="stretch", config=gcfg)
                 port_order = list(gr.groupby("PortId")["NoLots"].sum().sort_values(ascending=False).index)
                 st.plotly_chart(grading_bar_fig(gview, "PortId", "Daily Gradings in Lots | Per Port",
-                                                port_order, PORT_COLORS, hi=hi),
-                                width="stretch", config=gcfg)
+                                                port_order, PORT_COLORS), width="stretch", config=gcfg)
 
             with g_season:
-                g_opts = ["Total"] + list(gr.groupby("OriginName")["NoLots"].sum().sort_values(ascending=False).index)
-                gs_left, gs_right = st.columns([2, 3])
-                g_pick = None
-                with gs_left:
-                    g_pick = st.selectbox("Origin", g_opts, key="rg_season_view")
-                sel = gr if g_pick == "Total" else gr[gr["OriginName"] == g_pick]
-                with gs_left:
-                    st.plotly_chart(seasonality_fig(grading_cumulative(sel), "lots",
-                                                    f"Cumulative Lots Graded (YTD): {g_pick}"),
-                                    width="stretch", config={"displayModeBar": False})
-                with gs_right:
-                    st.markdown(f"<div class='mt side'>Monthly Lots Graded: {g_pick}</div>", unsafe_allow_html=True)
-                    st.markdown(monthly_lots_html(sel), unsafe_allow_html=True)
+                gcfg2 = {"displayModeBar": False}
+                origin_rank = list(gr.groupby("OriginName")["NoLots"].sum().sort_values(ascending=False).index)
+                top3, rest = origin_rank[:3], origin_rank[3:]
+                cm_col, _ = st.columns([1, 5])
+                with cm_col:
+                    crop_pick = st.selectbox("Crop year starts", MONTH_ABBR, index=9, key="rg_crop_m")
+                crop_m = MONTH_ABBR.index(crop_pick) + 1
+                g_first, g_last = gr["PanelDate"].min(), gr["PanelDate"].max()
+                q1, q2, q3, q4 = st.columns(4)
+                for col_, o in zip((q1, q2, q3), top3):
+                    with col_:
+                        st.markdown("<div style='height:42px'></div>", unsafe_allow_html=True)
+                        st.plotly_chart(crop_seasonality_fig(gr[gr["OriginName"] == o], f"{o} | cumulative lots",
+                                                             crop_m, g_first, g_last),
+                                        width="stretch", config=gcfg2)
+                with q4:
+                    other_pick = st.selectbox("Other origin", rest, key="rg_other_origin", label_visibility="collapsed")
+                    st.plotly_chart(crop_seasonality_fig(gr[gr["OriginName"] == other_pick],
+                                                         f"{other_pick} | cumulative lots", crop_m, g_first, g_last),
+                                    width="stretch", config=gcfg2)
+
+                st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
+                mA, mB = st.columns(2)
+                with mA:
+                    st.markdown("<div class='mt side'>Monthly Lots Graded: Total</div>", unsafe_allow_html=True)
+                    st.markdown(monthly_lots_html(gr, crop_m), unsafe_allow_html=True)
+                with mB:
+                    mo_pick = st.selectbox("Matrix origin", origin_rank, index=0, key="rg_matrix_origin",
+                                           label_visibility="collapsed")
+                    st.markdown(monthly_lots_html(gr[gr["OriginName"] == mo_pick], crop_m), unsafe_allow_html=True)
+
                 st.markdown("<div style='height:36px'></div>", unsafe_allow_html=True)
                 _gl, gd, _gr = st.columns([1, 2, 1])
                 with gd:
                     gd_span = st.radio("Distribution window", ["Last 1Y", "All"], index=1, horizontal=True,
                                        label_visibility="collapsed", key="rg_dist_span")
-                    per_panel = sel.groupby("PanelDate")["NoLots"].sum().sort_index()
+                    per_panel = gr.groupby("PanelDate")["NoLots"].sum().sort_index()
                     if gd_span == "Last 1Y":
                         per_panel = per_panel[per_panel.index >= per_panel.index.max() - pd.DateOffset(years=1)]
-                    st.plotly_chart(distribution_fig(per_panel, f"Lots Graded per Panel: {g_pick}", "lvl"),
-                                    width="stretch", config={"displayModeBar": False})
+                    st.plotly_chart(distribution_fig(per_panel, "Lots Graded per Panel: Total", "lvl"),
+                                    width="stretch", config=gcfg2)
