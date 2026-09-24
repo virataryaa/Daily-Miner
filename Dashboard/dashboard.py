@@ -80,6 +80,7 @@ div[role="radiogroup"] label:has(input:checked) div[data-testid="stMarkdownConta
 
 
 /* Sub-tabs (nested) stay smaller than the main tabs */
+.stTabs .stTabs .stTabs [data-baseweb="tab"], .stTabs .stTabs .stTabs [data-baseweb="tab"] p { font-size: 12.5px !important; }
 .stTabs .stTabs [data-baseweb="tab-list"] { padding: 2px; }
 .stTabs .stTabs [data-baseweb="tab"] { padding: 5px 15px !important; font-size: 14px !important; }
 .stTabs .stTabs [data-baseweb="tab"] p { font-size: 14px !important; }
@@ -276,26 +277,29 @@ if commodity == "Coffee":
             certs = load_rc_certs()
             end = certs["Date"].max()
             start = end - pd.DateOffset(years=HISTORY_YEARS)
-            c_min, c_max = certs["Date"].min(), certs["Date"].max()
-            span = st.radio("History", ["1Y", "3Y", "5Y", "All", "Custom"], horizontal=True,
-                            label_visibility="collapsed", key="rc_chart_span")
-            if span == "Custom":
-                cs, ce, _ = st.columns([1, 1, 4])
-                with cs:
-                    c_from = st.date_input("Start date", value=(c_max - pd.DateOffset(years=3)).date(),
-                                           min_value=c_min.date(), max_value=c_max.date(), key="rc_chart_from")
-                with ce:
-                    c_to = st.date_input("End date", value=c_max.date(),
-                                         min_value=c_min.date(), max_value=c_max.date(), key="rc_chart_to")
-                c_start, c_end = pd.Timestamp(c_from), pd.Timestamp(c_to)
-            elif span == "All":
-                c_start, c_end = c_min, c_max
-            else:
-                c_start, c_end = c_max - pd.DateOffset(years=int(span[0])), c_max
-            cview = certs[(certs["Date"] >= c_start) & (certs["Date"] <= c_end)]
-            ch1, ch2 = st.columns(2)
-            with ch1:
-                st.plotly_chart(total_certs_fig(cview), width="stretch", config={"displayModeBar": False})
-            with ch2:
-                st.plotly_chart(ports_certs_fig(cview), width="stretch", config={"displayModeBar": False})
-            st.markdown(certs_report_html(certs, start, end), unsafe_allow_html=True)
+            tab_data, tab_visuals = st.tabs(["Data Table", "Visuals"])
+            with tab_data:
+                st.markdown(certs_report_html(certs, start, end), unsafe_allow_html=True)
+            with tab_visuals:
+                c_min, c_max = certs["Date"].min(), certs["Date"].max()
+                span = st.radio("History", ["1Y", "3Y", "5Y", "All", "Custom"], horizontal=True,
+                                label_visibility="collapsed", key="rc_chart_span")
+                if span == "Custom":
+                    cs, ce, _ = st.columns([1, 1, 4])
+                    with cs:
+                        c_from = st.date_input("Start date", value=(c_max - pd.DateOffset(years=3)).date(),
+                                               min_value=c_min.date(), max_value=c_max.date(), key="rc_chart_from")
+                    with ce:
+                        c_to = st.date_input("End date", value=c_max.date(),
+                                             min_value=c_min.date(), max_value=c_max.date(), key="rc_chart_to")
+                    c_start, c_end = pd.Timestamp(c_from), pd.Timestamp(c_to)
+                elif span == "All":
+                    c_start, c_end = c_min, c_max
+                else:
+                    c_start, c_end = c_max - pd.DateOffset(years=int(span[0])), c_max
+                cview = certs[(certs["Date"] >= c_start) & (certs["Date"] <= c_end)]
+                ch1, ch2 = st.columns(2)
+                with ch1:
+                    st.plotly_chart(total_certs_fig(cview), width="stretch", config={"displayModeBar": False})
+                with ch2:
+                    st.plotly_chart(ports_certs_fig(cview), width="stretch", config={"displayModeBar": False})
