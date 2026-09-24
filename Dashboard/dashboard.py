@@ -98,6 +98,11 @@ span[data-baseweb="tag"] svg { fill: #ffffff !important; }
 [data-baseweb="popover"] [data-baseweb="menu"] li, [data-baseweb="popover"] [data-baseweb="menu"] li * { color: #1a1a2e !important; }
 [data-baseweb="select"] > div { background: #ffffff !important; color: #1a1a2e !important; }
 
+/* One-sided data bars (grading totals, monthly matrix) */
+.rpt td.cbl { position: relative; font-weight: 700; color: #0a2463; background: #f0f2f8; min-width: 62px; }
+.rpt td.cbl i { position: absolute; left: 0; top: 2px; bottom: 2px; background: #0a2463; opacity: .16; border-radius: 2px; }
+.rpt td.cbl span { position: relative; z-index: 1; }
+
 /* Certs report table */
 .rwrap { height: 60vh; overflow: auto; border: 1px solid #dfe3ee; border-radius: 12px; background: #ffffff; width: fit-content; max-width: 100%; }
 .rpt { width: max-content; border-collapse: separate; border-spacing: 0; font-size: 11px; line-height: 1.25; font-variant-numeric: tabular-nums; }
@@ -162,7 +167,7 @@ COUNTRY_PORTS = {
     "Germany": ["HAM", "BRE"],
     "Spain": ["BAR"],
     "Italy": ["GEN", "TRI"],
-    "Other": ["NOR"],
+    "USA": ["NOR"],
 }
 
 
@@ -240,7 +245,7 @@ def certs_report_html(df: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp,
 
 PORT_COLORS = {
     "ANT": NAVY, "LON": TEAL, "TRI": AMBER, "FEL": "#6b7fb5", "AMS": "#9b6bb3", "ROT": "#c94a4a",
-    "HAM": "#1f9d6f", "BAR": "#c0722c", "BRE": "#4a5578", "GEN": "#8fa3d1", "LIV": "#b58f4a", "NOR": GREY,
+    "LEH": "#6c8ebf", "HAM": "#1f9d6f", "BAR": "#c0722c", "BRE": "#4a5578", "GEN": "#8fa3d1", "LIV": "#b58f4a", "NOR": GREY,
 }
 
 
@@ -526,7 +531,8 @@ def distribution_fig(values: pd.Series, title: str, label: str) -> go.Figure:
                              line=dict(color=TEAL, width=2.4), hoverinfo="skip"))
     fig.add_vline(x=latest, line=dict(color=AMBER, width=2, dash="dash"))
     chart_layout(fig, title, height=540)
-    zero_note = f"zero-change days not drawn: {n_zero:,} ({n_zero / len(vals) * 100:.0f}%)  |  1st-99th percentile shown"
+    zero_note = (f"zero-change days not drawn: {n_zero:,} ({n_zero / len(vals) * 100:.0f}%)  |  1st-99th percentile shown"
+                 if label == "chg" else "1st-99th percentile shown")
     fig.update_layout(
         showlegend=False, hovermode="closest", margin=dict(t=40, b=8, l=8, r=8),
         yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
@@ -538,6 +544,156 @@ def distribution_fig(values: pd.Series, title: str, label: str) -> go.Figure:
                           font=dict(size=11, color="#5a6688"))],
     )
     return fig
+
+
+# ------------------------------------------------------------------ grading
+GRADING_ORIGIN_MAIN = {"Brazilian Conillon": "Brazil", "Vietnam": "Vietnam", "Indonesia": "Indonesia"}
+GRADING_CLASS_ORDER = ["1", "2", "3", "4", "P", "NA"]
+GRADING_CLASS_LABEL = {"NA": "NT"}
+GRADING_CLASS_COLORS = {"1": NAVY, "2": TEAL, "3": AMBER, "4": RED, "P": GREEN, "NA": GREY}
+GRADING_ORIGIN_COLORS = {"Brazil": NAVY, "Vietnam": TEAL, "Indonesia": AMBER, "Other": "#b8c0d6"}
+PORT_COUNTRY = {"ANT": "Belgium", "LON": "UK", "FEL": "UK", "LIV": "UK", "AMS": "Netherlands", "ROT": "Netherlands",
+                "HAM": "Germany", "BRE": "Germany", "BAR": "Spain", "TRI": "Italy", "GEN": "Italy",
+                "LEH": "France", "NOR": "USA"}
+
+
+@st.cache_data(ttl=600)
+def load_rc_grading() -> pd.DataFrame:
+    g = pd.read_parquet(DB_DIR / "rc_grading.parquet")
+    g["PanelDate"] = pd.to_datetime(g["PanelDate"])
+    g["Origin2"] = g["Origin"].map(GRADING_ORIGIN_MAIN).fillna("Other")
+    g["Country"] = g["PortId"].map(PORT_COUNTRY).fillna("Other")
+    return g
+
+
+def grading_table_html(g: pd.DataFrame, height: str = "60vh") -> str:
+    """Panel dates down the rows. Left: total lots (data bars) then Origin > Class.
+    Right: Country > Port. Empty columns are left out."""
+    tot = g.groupby("PanelDate")["NoLots"].sum().sort_index(ascending=False)
+    oc = g.groupby(["PanelDate", "Origin2", "Class"])["NoLots"].sum().to_dict()
+    pc = g.groupby(["PanelDate", "PortId"])["NoLots"].sum().to_dict()
+    origin_rank = g.groupby("Origin2")["NoLots"].sum().sort_values(ascending=False)
+    country_rank = g.groupby("Country")["NoLots"].sum().sort_values(ascending=False)
+    port_rank = g.groupby("PortId")["NoLots"].sum().sort_values(ascending=False)
+
+    o_groups = []
+    for o in origin_rank.index:
+        cls = [c for c in GRADING_CLASS_ORDER if ((g["Origin2"] == o) & (g["Class"] == c)).any()]
+        if cls:
+            o_groups.append((o, cls))
+    p_groups = []
+    for c in country_rank.index:
+        ports = [p for p in port_rank.index if PORT_COUNTRY.get(p, "Other") == c]
+        if ports:
+            p_groups.append((c, ports))
+    o_cols = [(o, c) for o, cls in o_groups for c in cls]
+    p_cols = [(c, p) for c, ps in p_groups for p in ps]
+    o_start = set(); k = 0
+    for _, cls in o_groups:
+        o_start.add(k); k += len(cls)
+    p_start = set(); k = 0
+    for _, ps in p_groups:
+        p_start.add(k); k += len(ps)
+    top = max(float(tot.max()), 1.0)
+
+    def num(v):
+        return "" if not v else f"{int(v):,}"
+
+    head = [f"<div class='rwrap' style='height:{height}'><table class='rpt'><thead>",
+            "<tr class='h1'><th class='dt' rowspan='3'>Panel date</th>",
+            f"<th colspan='{len(o_cols) + 1}'>Lots Graded by Origin and Class</th>",
+            f"<th colspan='{len(p_cols)}' class='sep'>Lots Graded by Port</th></tr>",
+            "<tr class='h2'><th rowspan='2'>TOT</th>"]
+    head += [f"<th colspan='{len(cls)}' class='gs'>{o}</th>" for o, cls in o_groups]
+    for i, (c, ps) in enumerate(p_groups):
+        head.append(f"<th colspan='{len(ps)}' class='gs{' sep' if i == 0 else ''}'>{c}</th>")
+    head.append("</tr><tr class='h3'>")
+    head += [f"<th{' class=gs' if i in o_start else ''}>{GRADING_CLASS_LABEL.get(c, c)}</th>" for i, (o, c) in enumerate(o_cols)]
+    head += [f"<th class='{'gs' if i in p_start else ''}{' sep' if i == 0 else ''}'>{p}</th>" for i, (c, p) in enumerate(p_cols)]
+    head.append("</tr></thead><tbody>")
+
+    body = []
+    for d, t in tot.items():
+        row = [f"<tr><td class='d'>{d.strftime('%d-%b-%y')}</td>",
+               f"<td class='cbl'><i style='width:{t / top * 100:.1f}%'></i><span>{int(t):,}</span></td>"]
+        row += [f"<td{' class=gs' if i in o_start else ''}>{num(oc.get((d, o, c), 0))}</td>" for i, (o, c) in enumerate(o_cols)]
+        row += [f"<td class='{'gs' if i in p_start else ''}{' sep' if i == 0 else ''}'>{num(pc.get((d, p), 0))}</td>"
+                for i, (c, p) in enumerate(p_cols)]
+        row.append("</tr>")
+        body.append("".join(row))
+    return "".join(head) + "".join(body) + "</tbody></table></div>"
+
+
+def grading_bar_fig(view: pd.DataFrame, col: str, title: str, order: list, colors: dict,
+                    labels: dict | None = None, height: int = 340) -> go.Figure:
+    """Lots graded per panel date, stacked by `col` (category axis: only panel dates are shown)."""
+    fig = go.Figure()
+    if view.empty:
+        return chart_layout(fig, title, height)
+    piv = view.groupby(["PanelDate", col])["NoLots"].sum().unstack(fill_value=0).sort_index()
+    xs = piv.index.strftime("%d/%m/%y")
+    for key in order:
+        if key in piv.columns and piv[key].sum() > 0:
+            name = (labels or {}).get(key, key)
+            fig.add_trace(go.Bar(x=xs, y=piv[key], name=name, marker_color=colors.get(key, GREY),
+                                 hovertemplate="%{y:,.0f}<extra>" + name + "</extra>"))
+    total = piv.sum(axis=1)
+    if len(piv) <= 70:
+        fig.add_trace(go.Scatter(x=xs, y=total, mode="text", text=[f"{int(v):,}" for v in total],
+                                 textposition="top center", textfont=dict(size=10, color=NAVY),
+                                 showlegend=False, hoverinfo="skip"))
+    chart_layout(fig, title, height)
+    fig.update_layout(
+        barmode="stack", bargap=0.28,
+        xaxis=dict(type="category", tickangle=-90, tickfont=dict(size=9), nticks=60),
+        yaxis=dict(title=None, tickformat=","),
+        legend=dict(orientation="v", x=1.01, y=1, xanchor="left", yanchor="top"),
+        margin=dict(t=44, b=8, l=8, r=8))
+    return fig
+
+
+def grading_cumulative(g: pd.DataFrame) -> pd.DataFrame:
+    """Daily year-to-date cumulative lots graded (resets every 1 Jan) as a Date/lots frame."""
+    s = g.groupby("PanelDate")["NoLots"].sum()
+    idx = pd.date_range(pd.Timestamp(year=s.index.min().year, month=1, day=1), s.index.max())
+    daily = s.reindex(idx, fill_value=0)
+    cum = daily.groupby(daily.index.year).cumsum()
+    return pd.DataFrame({"Date": cum.index, "lots": cum.values.astype(float)})
+
+
+def monthly_lots_html(g: pd.DataFrame) -> str:
+    """Year x month lots graded with in-cell bars and a YEAR total."""
+    s = g.groupby("PanelDate")["NoLots"].sum()
+    tbl = s.groupby([s.index.year, s.index.month]).sum().unstack().reindex(columns=range(1, 13))
+    first, last = s.index.min(), s.index.max()
+    for yr in tbl.index:
+        for m in range(1, 13):
+            before_start = (yr, m) < (first.year, first.month)
+            after_end = (yr, m) > (last.year, last.month)
+            if before_start or after_end:
+                tbl.loc[yr, m] = np.nan
+            elif pd.isna(tbl.loc[yr, m]):
+                tbl.loc[yr, m] = 0
+    year_tot = tbl.sum(axis=1, min_count=1)
+    scale, yscale = max(tbl.max().max(), 1), max(year_tot.max(), 1)
+    months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+
+    def cell(v, sc, cls="cbl"):
+        if pd.isna(v):
+            return "<td class='na'></td>"
+        v = int(round(v))
+        bar = f"<i style='width:{v / sc * 100:.1f}%'></i>" if v else ""
+        return f"<td class='{cls}'>{bar}<span>{v:,}</span></td>"
+
+    out = ["<div class='rwrap' style='height:auto'><table class='rpt mx'><thead><tr class='h2'><th class='dt'>Year</th>"]
+    out += [f"<th>{m}</th>" for m in months] + ["<th class='sep'>Year</th></tr></thead><tbody>"]
+    for yr in tbl.index:
+        row = [f"<tr><td class='d'>{yr}</td>"] + [cell(tbl.loc[yr, m], scale) for m in range(1, 13)]
+        row.append(cell(year_tot[yr], yscale, "cbl sep"))
+        row.append("</tr>")
+        out.append("".join(row))
+    out.append("</tbody></table></div>")
+    return "".join(out)
 
 
 with st.sidebar:
@@ -633,4 +789,76 @@ if commodity == "Coffee":
                     else:
                         chg = chg_all[chg_all.index >= DIST_START]
                     st.plotly_chart(distribution_fig(chg, f"Daily Change Distribution: {view_pick}", "chg"),
+                                    width="stretch", config={"displayModeBar": False})
+
+        with sub_grading:
+            gr = load_rc_grading()
+            g_data, g_vis, g_season = st.tabs(["Data Table", "Visuals", "Seasonality & Distribution"])
+            with g_data:
+                st.markdown(grading_table_html(gr), unsafe_allow_html=True)
+
+            with g_vis:
+                gcfg = {"displayModeBar": False}
+                g_min, g_max = gr["PanelDate"].min(), gr["PanelDate"].max()
+                g_span = st.radio("Grading history", ["3M", "6M", "1Y", "All", "Custom"], index=1, horizontal=True,
+                                  label_visibility="collapsed", key="rg_span")
+                if g_span == "Custom":
+                    gc1, gc2, _ = st.columns([1, 1, 4])
+                    with gc1:
+                        g_from = st.date_input("Start date", value=(g_max - pd.DateOffset(months=6)).date(),
+                                               min_value=g_min.date(), max_value=g_max.date(), key="rg_from")
+                    with gc2:
+                        g_to = st.date_input("End date", value=g_max.date(),
+                                             min_value=g_min.date(), max_value=g_max.date(), key="rg_to")
+                    gs_, ge_ = pd.Timestamp(g_from), pd.Timestamp(g_to)
+                elif g_span == "All":
+                    gs_, ge_ = g_min, g_max
+                else:
+                    gs_, ge_ = g_max - pd.DateOffset(months={"3M": 3, "6M": 6, "1Y": 12}[g_span]), g_max
+                f1, f2, _ = st.columns([2, 2, 3])
+                cls_opts = [GRADING_CLASS_LABEL.get(c, c) for c in GRADING_CLASS_ORDER]
+                with f1:
+                    cls_pick = st.multiselect("Class", cls_opts, default=cls_opts, key="rg_class",
+                                              placeholder="Class")
+                with f2:
+                    org_opts = [o for o in GRADING_ORIGIN_COLORS if o in set(gr["Origin2"])]
+                    org_pick = st.multiselect("Origin", org_opts, default=org_opts, key="rg_origin",
+                                              placeholder="Origin")
+                inv = {v: k for k, v in GRADING_CLASS_LABEL.items()}
+                gview = gr[(gr["PanelDate"] >= gs_) & (gr["PanelDate"] <= ge_)
+                           & gr["Class"].isin([inv.get(c, c) for c in cls_pick]) & gr["Origin2"].isin(org_pick)]
+                st.plotly_chart(grading_bar_fig(gview, "Origin2", "Daily Gradings in Lots | Per Origin",
+                                                list(GRADING_ORIGIN_COLORS), GRADING_ORIGIN_COLORS),
+                                width="stretch", config=gcfg)
+                st.plotly_chart(grading_bar_fig(gview, "Class", "Daily Gradings in Lots | Per Class",
+                                                GRADING_CLASS_ORDER, GRADING_CLASS_COLORS, GRADING_CLASS_LABEL),
+                                width="stretch", config=gcfg)
+                port_order = list(gr.groupby("PortId")["NoLots"].sum().sort_values(ascending=False).index)
+                st.plotly_chart(grading_bar_fig(gview, "PortId", "Daily Gradings in Lots | Per Port",
+                                                port_order, PORT_COLORS),
+                                width="stretch", config=gcfg)
+
+            with g_season:
+                g_opts = ["Total"] + list(gr.groupby("Origin2")["NoLots"].sum().sort_values(ascending=False).index)
+                gs_left, gs_right = st.columns([2, 3])
+                g_pick = None
+                with gs_left:
+                    g_pick = st.selectbox("Origin", g_opts, key="rg_season_view")
+                sel = gr if g_pick == "Total" else gr[gr["Origin2"] == g_pick]
+                with gs_left:
+                    st.plotly_chart(seasonality_fig(grading_cumulative(sel), "lots",
+                                                    f"Cumulative Lots Graded (YTD): {g_pick}"),
+                                    width="stretch", config={"displayModeBar": False})
+                with gs_right:
+                    st.markdown(f"<div class='mt side'>Monthly Lots Graded: {g_pick}</div>", unsafe_allow_html=True)
+                    st.markdown(monthly_lots_html(sel), unsafe_allow_html=True)
+                st.markdown("<div style='height:36px'></div>", unsafe_allow_html=True)
+                _gl, gd, _gr = st.columns([1, 2, 1])
+                with gd:
+                    gd_span = st.radio("Distribution window", ["Last 1Y", "All"], index=1, horizontal=True,
+                                       label_visibility="collapsed", key="rg_dist_span")
+                    per_panel = sel.groupby("PanelDate")["NoLots"].sum().sort_index()
+                    if gd_span == "Last 1Y":
+                        per_panel = per_panel[per_panel.index >= per_panel.index.max() - pd.DateOffset(years=1)]
+                    st.plotly_chart(distribution_fig(per_panel, f"Lots Graded per Panel: {g_pick}", "lvl"),
                                     width="stretch", config={"displayModeBar": False})
