@@ -473,7 +473,7 @@ def distribution_fig(values: pd.Series, title: str, label: str) -> go.Figure:
     fig.add_trace(go.Scatter(x=xs, y=pdf, mode="lines", name="Normal fit",
                              line=dict(color=TEAL, width=2.4), hoverinfo="skip"))
     fig.add_vline(x=latest, line=dict(color=AMBER, width=2, dash="dash"))
-    chart_layout(fig, title, height=400)
+    chart_layout(fig, title, height=540)
     fig.update_layout(
         showlegend=False, hovermode="closest", margin=dict(t=40, b=8, l=8, r=8),
         yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
@@ -557,10 +557,18 @@ if commodity == "Coffee":
                 with s_right:
                     st.markdown(f"<div class='mt side'>Monthly Change: {view_pick}</div>", unsafe_allow_html=True)
                     st.markdown(monthly_change_html(certs, opts[view_pick]), unsafe_allow_html=True)
-                lvl = certs.set_index("Date")[opts[view_pick]].dropna()
-                lvl = lvl[lvl.index >= DIST_START]
+                chg_all = certs.set_index("Date")[opts[view_pick]].dropna().astype(float).diff().dropna()
                 st.markdown("<div style='height:36px'></div>", unsafe_allow_html=True)
                 _l, d1, _r = st.columns([1, 2, 1])
                 with d1:
-                    st.plotly_chart(distribution_fig(lvl.diff().dropna(), f"Daily Change Distribution: {view_pick}", "chg"),
+                    dist_span = st.radio("Distribution window", ["Last 1Y", "Last 5Y", "All"], index=2, horizontal=True,
+                                         label_visibility="collapsed", key="rc_dist_span")
+                    last_dt = chg_all.index.max()
+                    if dist_span == "Last 1Y":
+                        chg = chg_all[chg_all.index >= last_dt - pd.DateOffset(years=1)]
+                    elif dist_span == "Last 5Y":
+                        chg = chg_all[chg_all.index >= last_dt - pd.DateOffset(years=5)]
+                    else:
+                        chg = chg_all[chg_all.index >= DIST_START]
+                    st.plotly_chart(distribution_fig(chg, f"Daily Change Distribution: {view_pick}", "chg"),
                                     width="stretch", config={"displayModeBar": False})
