@@ -271,38 +271,35 @@ def major_ports(view: pd.DataFrame, grade: str = "VG", min_share: float = 0.01) 
 
 
 def ports_certs_fig(df: pd.DataFrame, grade: str = "VG") -> go.Figure:
-    """Line per major port; the bigger the port's share, the bolder the line."""
+    """Stacked area of certs per major port (biggest at the bottom); minor ports pooled into Other."""
     majors = major_ports(df, grade)
-    tot = df[f"LRC-TOT-{grade}"].astype(float).mean()
-    means = {p: df[f"LRC-{p}-{grade}"].astype(float).mean() / tot for p in majors}
-    top = max(means.values()) if means else 1
+    minors = [p for p in PORT_ORDER if p not in majors]
     fig = go.Figure()
-    for rank, p in enumerate(majors):
+    for p in majors:
         s = df[["Date", f"LRC-{p}-{grade}"]].dropna()
-        w = 1.2 + 3.4 * (means[p] / top)
         fig.add_trace(go.Scatter(
-            x=s["Date"], y=s[f"LRC-{p}-{grade}"], mode="lines", name=p, legendrank=rank,
-            line=dict(color=PORT_COLORS.get(p, GREY), width=w),
-            opacity=0.55 + 0.45 * (means[p] / top),
+            x=s["Date"], y=s[f"LRC-{p}-{grade}"], mode="lines", name=p, stackgroup="one",
+            line=dict(width=0.6, color=PORT_COLORS.get(p, GREY)), fillcolor=PORT_COLORS.get(p, GREY),
             hovertemplate="%{y:,.0f}<extra>" + p + "</extra>"))
-    fig.data = fig.data[::-1]  # draw the biggest port last, on top
+    if minors:
+        other = df[[f"LRC-{p}-{grade}" for p in minors]].astype(float).sum(axis=1, min_count=1)
+        fig.add_trace(go.Scatter(x=df["Date"], y=other, mode="lines", name="Other", stackgroup="one",
+                                 line=dict(width=0.6, color="#c5cbdd"), fillcolor="#c5cbdd",
+                                 hovertemplate="%{y:,.0f}<extra>Other</extra>"))
     return chart_layout(fig, "Certs Per Port")
 
 
-def rolling_fig(series: pd.Series, start: pd.Timestamp, end: pd.Timestamp, title: str) -> go.Figure:
-    """Rolling 5- and 20-observation change of a stock series (computed on the
-    full history, then cut to the chosen window)."""
-    ser = series.dropna().astype(float)
-    fig = go.Figure()
-    for n, color, width in [(20, NAVY, 2.6), (5, TEAL, 1.6)]:
-        r = ser.diff(n).dropna()
-        r = r[(r.index >= start) & (r.index <= end)]
-        fig.add_trace(go.Scatter(x=r.index, y=r.values, mode="lines", name=f"{n}d",
-                                 line=dict(color=color, width=width),
-                                 hovertemplate="%{y:+,.0f}<extra>" + f"{n}d" + "</extra>"))
+def rolling_fig(series: pd.Series, n: int, start: pd.Timestamp, end: pd.Timestamp, title: str) -> go.Figure:
+    """Rolling n-observation change of a stock series (computed on the full
+    history, then cut to the chosen window)."""
+    r = series.dropna().astype(float).diff(n).dropna()
+    r = r[(r.index >= start) & (r.index <= end)]
+    fig = go.Figure(go.Scatter(x=r.index, y=r.values, mode="lines", name=f"{n}d",
+                               line=dict(color=NAVY, width=2.2),
+                               hovertemplate="%{y:+,.0f}<extra>" + f"{n}d" + "</extra>"))
     fig.add_hline(y=0, line=dict(color="#c5cbdd", width=1))
     chart_layout(fig, title, height=340)
-    fig.update_layout(yaxis=dict(tickformat="+,"))
+    fig.update_layout(yaxis=dict(tickformat="+,"), showlegend=False)
     return fig
 
 
@@ -510,16 +507,21 @@ if commodity == "Coffee":
                     st.plotly_chart(total_certs_fig(cview), width="stretch", config=cfg)
                 with ch2:
                     st.plotly_chart(ports_certs_fig(cview), width="stretch", config=cfg)
-                r1, r2 = st.columns(2)
                 port_opts = [k for k in seasonality_options(certs) if k != "Total"]
+                r1, r2 = st.columns(2)
                 with r1:
-                    st.markdown("<div style='height:40px'></div>", unsafe_allow_html=True)
-                    st.plotly_chart(rolling_fig(certs.set_index("Date")["LRC-TOT-VG"], c_start, c_end,
-                                                "Rolling Change: Total (20d / 5d)"), width="stretch", config=cfg)
+                    roll_n = st.radio("Rolling window", [5, 20, 60], index=1, horizontal=True,
+                                      format_func=lambda n: f"Rolling {n}d", label_visibility="collapsed",
+                                      key="rc_roll_n")
                 with r2:
                     roll_port = st.selectbox("Rolling port", port_opts, key="rc_roll_port", label_visibility="collapsed")
-                    st.plotly_chart(rolling_fig(certs.set_index("Date")[f"LRC-{roll_port}-VG"], c_start, c_end,
-                                                f"Rolling Change: {roll_port} (20d / 5d)"), width="stretch", config=cfg)
+                r3, r4 = st.columns(2)
+                with r3:
+                    st.plotly_chart(rolling_fig(certs.set_index("Date")["LRC-TOT-VG"], roll_n, c_start, c_end,
+                                                f"Rolling Change: Total ({roll_n}d)"), width="stretch", config=cfg)
+                with r4:
+                    st.plotly_chart(rolling_fig(certs.set_index("Date")[f"LRC-{roll_port}-VG"], roll_n, c_start, c_end,
+                                                f"Rolling Change: {roll_port} ({roll_n}d)"), width="stretch", config=cfg)
                 sh1, sh2 = st.columns(2)
                 with sh1:
                     st.plotly_chart(share_area_fig(cview), width="stretch", config=cfg)
