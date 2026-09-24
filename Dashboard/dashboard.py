@@ -264,6 +264,47 @@ def ports_certs_fig(df: pd.DataFrame, grade: str = "VG") -> go.Figure:
     return chart_layout(fig, "Certs Per Port")
 
 
+def seasonality_fig(df: pd.DataFrame, col: str, title: str) -> go.Figure:
+    """Week-of-year seasonality: history bands (min-max, 10-90, 25-75 pct), average,
+    last year in red and the current year in navy (same styling as Cotton On-Call)."""
+    s = df.set_index("Date")[col].dropna().astype(float)
+    w = s.resample("W").last().ffill().to_frame("v")
+    iso = w.index.isocalendar()
+    w["x"], w["yr"] = iso.week.astype(int).values, iso.year.astype(int).values
+    w = w[w["x"] <= 52]
+    cur = int(w["yr"].max())
+    hist = w[w["yr"] < cur]
+    band = hist.groupby("x")["v"].agg(
+        lo="min", p10=lambda v: v.quantile(0.10), p25=lambda v: v.quantile(0.25),
+        avg="mean", p75=lambda v: v.quantile(0.75), p90=lambda v: v.quantile(0.90), hi="max").sort_index()
+
+    fig = go.Figure()
+    for lo, hi, color, name in [("lo", "hi", "rgba(31,138,156,0.08)", "Min-Max"),
+                                ("p10", "p90", "rgba(31,138,156,0.16)", "10th-90th pct"),
+                                ("p25", "p75", "rgba(31,138,156,0.28)", "25th-75th pct")]:
+        fig.add_trace(go.Scatter(x=band.index, y=band[hi], line=dict(width=0), showlegend=False, hoverinfo="skip"))
+        fig.add_trace(go.Scatter(x=band.index, y=band[lo], fill="tonexty", fillcolor=color,
+                                 line=dict(width=0), name=name, hoverinfo="skip"))
+    fig.add_trace(go.Scatter(x=band.index, y=band["avg"], mode="lines", name="Average",
+                             line=dict(color="#4a5578", width=1.5, dash="dot"), hovertemplate="%{y:,.0f}<extra>Avg</extra>"))
+    for yr, color, width in [(cur - 1, RED, 2), (cur, NAVY, 3)]:
+        g = w[w["yr"] == yr].sort_values("x")
+        if not g.empty:
+            fig.add_trace(go.Scatter(x=g["x"], y=g["v"], mode="lines", name=str(yr), line=dict(color=color, width=width),
+                                     hovertemplate="%{y:,.0f}<extra>" + str(yr) + "</extra>"))
+    chart_layout(fig, title, height=440)
+    fig.update_layout(xaxis=dict(title="Week of year", dtick=4, range=[1, 52]))
+    return fig
+
+
+def seasonality_options(df: pd.DataFrame, grade: str = "VG") -> dict:
+    """Label -> column. Total first, then ports with the most stock today first."""
+    last = df.iloc[-1]
+    ports = [p for p in PORT_ORDER if df[f"LRC-{p}-{grade}"].fillna(0).abs().sum() > 0]
+    ports.sort(key=lambda p: -(0 if pd.isna(last[f"LRC-{p}-{grade}"]) else last[f"LRC-{p}-{grade}"]))
+    return {"Total": f"LRC-TOT-{grade}", **{p: f"LRC-{p}-{grade}" for p in ports}}
+
+
 with st.sidebar:
     st.markdown("<div class='sb-title'>Daily Miner</div>", unsafe_allow_html=True)
     st.markdown("<div class='sb-label'>Commodity</div>", unsafe_allow_html=True)
@@ -303,3 +344,7 @@ if commodity == "Coffee":
                     st.plotly_chart(total_certs_fig(cview), width="stretch", config={"displayModeBar": False})
                 with ch2:
                     st.plotly_chart(ports_certs_fig(cview), width="stretch", config={"displayModeBar": False})
+                opts = seasonality_options(certs)
+                view_pick = st.selectbox("Seasonality", list(opts), key="rc_season_view")
+                st.plotly_chart(seasonality_fig(certs, opts[view_pick], f"Seasonality: {view_pick}"),
+                                width="stretch", config={"displayModeBar": False})
