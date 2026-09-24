@@ -89,7 +89,7 @@ div[role="radiogroup"] label:has(input:checked) div[data-testid="stMarkdownConta
 [data-testid="stSidebar"] div[role="radiogroup"] label div[data-testid="stMarkdownContainer"] p { font-size: 15px !important; }
 
 /* Certs report table */
-.rwrap { max-height: 78vh; overflow: auto; border: 1px solid #dfe3ee; border-radius: 12px; background: #ffffff; width: fit-content; max-width: 100%; }
+.rwrap { height: 75vh; overflow: auto; border: 1px solid #dfe3ee; border-radius: 12px; background: #ffffff; width: fit-content; max-width: 100%; }
 .rpt { width: max-content; border-collapse: separate; border-spacing: 0; font-size: 11px; line-height: 1.25; font-variant-numeric: tabular-nums; }
 .rpt thead th { position: sticky; z-index: 2; background: #0a2463; color: #ffffff; font-weight: 600; padding: 4px 9px; font-size: 10.5px; text-align: center; white-space: nowrap; }
 .rpt thead tr.h1 th { top: 0; height: 24px; background: #14357f; letter-spacing: .05em; font-size: 11px; }
@@ -191,18 +191,5 @@ if commodity == "Coffee":
         sub_certs, sub_grading, sub_both = st.tabs(["Certs", "Grading", "Certs & Grading"])
         with sub_certs:
             certs = load_rc_certs()
-            d_min, d_max = certs["Date"].min().date(), certs["Date"].max().date()
-            rng = st.radio("Range", ["Last 3M", "Last 6M", "Last 1Y", "Custom"], horizontal=True,
-                           label_visibility="collapsed", key="rc_certs_range")
-            months = {"Last 3M": 3, "Last 6M": 6, "Last 1Y": 12}
-            if rng == "Custom":
-                picked = st.date_input("Custom range", value=(d_max - pd.DateOffset(months=3), d_max),
-                                       min_value=d_min, max_value=d_max, key="rc_certs_custom")
-                if isinstance(picked, (tuple, list)) and len(picked) == 2:
-                    start, end = pd.Timestamp(picked[0]), pd.Timestamp(picked[1])
-                else:
-                    start, end = pd.Timestamp(d_max) - pd.DateOffset(months=3), pd.Timestamp(d_max)
-            else:
-                end = pd.Timestamp(d_max)
-                start = end - pd.DateOffset(months=months[rng])
+            start, end = certs["Date"].min(), certs["Date"].max()
             st.markdown(certs_report_html(certs, start, end), unsafe_allow_html=True)
