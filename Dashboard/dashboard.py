@@ -346,6 +346,25 @@ def share_line_fig(df: pd.DataFrame, grade: str = "VG") -> go.Figure:
     return fig
 
 
+def country_share_line_fig(df: pd.DataFrame, grade: str = "VG", min_share: float = 0.01) -> go.Figure:
+    """Each country's share of total certs (%) over time; countries under min_share on average are left out."""
+    tot = df[f"LRC-TOT-{grade}"].astype(float).where(lambda v: v > 0)
+    fig = go.Figure()
+    for country, ports in countries_by_stock(df, grade):
+        cols = [f"LRC-{p}-{grade}" for p in ports]
+        vals = df[cols].astype(float).sum(axis=1, min_count=1)
+        share = vals / tot * 100
+        if not (share.mean() >= min_share * 100):
+            continue
+        ok = share.notna()
+        fig.add_trace(go.Scatter(x=df["Date"][ok], y=share[ok], mode="lines", name=country,
+                                 line=dict(color=PORT_COLORS.get(ports[0], GREY), width=2.0),
+                                 hovertemplate="%{y:.1f}%<extra>" + country + "</extra>"))
+    chart_layout(fig, "Country Share of Total", height=360)
+    fig.update_layout(yaxis=dict(ticksuffix="%", range=[0, 100]))
+    return fig
+
+
 def tint(hex_color: str, keep: float = 0.55) -> str:
     """Blend a hex colour towards white; keep = share of the original colour."""
     h = hex_color.lstrip("#")
@@ -556,10 +575,12 @@ if commodity == "Coffee":
                     st.plotly_chart(ports_certs_fig(cview), width="stretch", config=cfg)
 
                 st.markdown("<div class='sec'>Port mix</div>", unsafe_allow_html=True)
-                mx1, mx2 = st.columns(2)
+                mx1, mx2, mx3 = st.columns(3)
                 with mx1:
                     st.plotly_chart(share_line_fig(cview), width="stretch", config=cfg)
                 with mx2:
+                    st.plotly_chart(country_share_line_fig(cview), width="stretch", config=cfg)
+                with mx3:
                     st.plotly_chart(share_pie_fig(certs), width="stretch", config=cfg)
 
                 st.markdown("<div class='sec'>Momentum</div>", unsafe_allow_html=True)
