@@ -561,7 +561,7 @@ if commodity == "Coffee":
                 st.markdown("<div style='height:36px'></div>", unsafe_allow_html=True)
                 _l, d1, _r = st.columns([1, 2, 1])
                 with d1:
-                    dist_span = st.radio("Distribution window", ["Last 1Y", "Last 5Y", "All"], index=2, horizontal=True,
+                    dist_span = st.radio("Distribution window", ["Last 1Y", "Last 5Y", "All"], index=1, horizontal=True,
                                          label_visibility="collapsed", key="rc_dist_span")
                     last_dt = chg_all.index.max()
                     if dist_span == "Last 1Y":
