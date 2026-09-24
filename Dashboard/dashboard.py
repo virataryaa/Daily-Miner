@@ -17,7 +17,7 @@ RED = "#c94a4a"
 AMBER = "#c98a1f"
 GREY = "#8a94a8"
 
-st.set_page_config(page_title="Softs Daily Miner", layout="wide")
+st.set_page_config(page_title="Daily Miner", layout="wide")
 
 # Strict light theme (same approach as the Cotton On-Call dashboard):
 # colours hard-coded, .streamlit/config.toml pins base="light".
@@ -71,25 +71,26 @@ div[role="radiogroup"] label:has(input:checked) div[data-testid="stMarkdownConta
 .sb-label { font-size: 11px; color: #7a86a8; text-transform: uppercase; letter-spacing: .06em; margin: 6px 0 4px; }
 
 /* Certs report table */
-.rpt { width: 100%; border-collapse: separate; border-spacing: 0; background: #ffffff; border: 1px solid #dfe3ee; border-radius: 12px; overflow: hidden; font-size: 13px; }
-.rpt th { background: #0a2463; color: #ffffff; font-weight: 600; text-align: right; padding: 10px 14px; font-size: 12px; letter-spacing: .03em; }
-.rpt th.l, .rpt td.l { text-align: left; }
-.rpt th.gap { background: #0a2463; width: 18px; padding: 0; }
-.rpt td { padding: 9px 14px; text-align: right; border-bottom: 1px solid #eef0f6; color: #1a1a2e; font-variant-numeric: tabular-nums; }
-.rpt td.l { font-weight: 600; color: #0a2463; }
-.rpt td.gap { border-bottom: 1px solid #eef0f6; padding: 0; }
-.rpt tr:last-child td { border-bottom: none; }
-.rpt tr.tot td { background: #f0f2f8; font-weight: 700; color: #0a2463; }
-.rpt td.chg { width: 260px; padding: 6px 14px; }
-.chgcell { display: flex; align-items: center; gap: 10px; }
-.chgval { width: 52px; text-align: right; font-weight: 600; }
-.chgbar { position: relative; flex: 1; height: 16px; }
-.chgbar::before { content: ''; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: #c5cbdd; }
-.chgbar i { position: absolute; top: 2px; bottom: 2px; border-radius: 3px; }
-.chgbar i.up { left: 50%; background: #1f9d6f; }
-.chgbar i.dn { right: 50%; background: #c94a4a; }
-.pos { color: #1f9d6f; } .neg { color: #c94a4a; } .zero { color: #8a94a8; }
-.share { color: #5a6688; }
+.rwrap { max-height: 680px; overflow: auto; border: 1px solid #dfe3ee; border-radius: 12px; background: #ffffff; }
+.rpt { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.rpt thead th { position: sticky; top: 0; z-index: 2; background: #0a2463; color: #ffffff; font-weight: 600; padding: 8px 10px; text-align: right; white-space: nowrap; }
+.rpt thead th small { display: block; font-weight: 500; font-size: 10.5px; color: #9fb0e0; margin-top: 1px; }
+.rpt thead th.l { text-align: left; }
+.rpt thead th.sec { background: #14357f; text-align: center; letter-spacing: .04em; }
+.rpt thead th.gap { background: #fafafa; padding: 0; width: 14px; min-width: 14px; }
+.rpt td { padding: 5px 10px; text-align: right; border-bottom: 1px solid #eef0f6; color: #1a1a2e; white-space: nowrap; }
+.rpt td.d { text-align: left; color: #5a6688; font-weight: 500; }
+.rpt td.tot { font-weight: 700; color: #0a2463; background: #f0f2f8; }
+.rpt td.gap { padding: 0; background: #fafafa; border-bottom: none; }
+.rpt td.cb { position: relative; font-weight: 700; min-width: 96px; text-align: center; background: #f6f7fb; }
+.rpt td.cb i { position: absolute; top: 3px; bottom: 3px; border-radius: 2px; opacity: .55; }
+.rpt td.cb i.up { left: 50%; background: #1f9d6f; }
+.rpt td.cb i.dn { right: 50%; background: #c94a4a; }
+.rpt td.cb::before { content: ''; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: #c5cbdd; }
+.rpt td.cb span { position: relative; z-index: 1; }
+.rpt tr:hover td { background: #f3f6ff; }
+.rpt tr:hover td.tot, .rpt tr:hover td.cb { background: #e6ebf7; }
+.pos { color: #1f9d6f; } .neg { color: #c94a4a; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -98,11 +99,6 @@ div[role="radiogroup"] label:has(input:checked) div[data-testid="stMarkdownConta
 
 COMMODITIES = ["Coffee", "Cocoa", "Sugar"]
 
-PORT_NAMES = {
-    "ANT": "Antwerp", "LON": "London", "FEL": "Felixstowe", "LIV": "Liverpool",
-    "AMS": "Amsterdam", "ROT": "Rotterdam", "HAM": "Hamburg", "BRE": "Bremen",
-    "BAR": "Barcelona", "GEN": "Genoa", "TRI": "Trieste", "NOR": "Northern",
-}
 
 
 @st.cache_data(ttl=600)
@@ -116,50 +112,59 @@ def fmt_int(v):
     return "-" if pd.isna(v) else f"{int(v):,}"
 
 
-def certs_report_html(df: pd.DataFrame, grade: str = "VG") -> str:
-    """Certs by port (latest) with day-over-day change as in-cell bars."""
-    last, prev = df.iloc[-1], df.iloc[-2]
-    tot_col = f"LRC-TOT-{grade}"
-    ports = [p for p in PORT_NAMES if f"LRC-{p}-{grade}" in df.columns]
-    ports = [p for p in ports if pd.notna(last[f"LRC-{p}-{grade}"]) and last[f"LRC-{p}-{grade}"] != 0
-             or pd.notna(prev[f"LRC-{p}-{grade}"]) and prev[f"LRC-{p}-{grade}"] != 0]
-    rows = []
-    for p in ports:
-        c = f"LRC-{p}-{grade}"
-        now = 0 if pd.isna(last[c]) else int(last[c])
-        was = 0 if pd.isna(prev[c]) else int(prev[c])
-        rows.append((PORT_NAMES[p], now, now - was))
-    rows.sort(key=lambda r: -r[1])
-    tot_now, tot_chg = int(last[tot_col]), int(last[tot_col] - prev[tot_col])
-    scale = max([abs(r[2]) for r in rows] + [1])
+PORT_ORDER = ["AMS", "ANT", "BAR", "BRE", "FEL", "GEN", "HAM", "LIV", "LON", "NOR", "ROT", "TRI"]
+N_ROWS = 250
 
-    def chg_cell(chg):
-        cls = "pos" if chg > 0 else "neg" if chg < 0 else "zero"
-        txt = f"{chg:+,}" if chg else "0"
+
+def certs_report_html(df: pd.DataFrame, grade: str = "VG", n_rows: int = N_ROWS) -> str:
+    """Dates down the rows: stocks by port on the left, day-over-day change
+    by port on the right (total change carries in-cell bars)."""
+    cols = [f"LRC-{p}-{grade}" for p in PORT_ORDER]
+    tot = f"LRC-TOT-{grade}"
+    lv = df[["Date", tot] + cols].copy()
+    chg = lv[[tot] + cols].fillna(0).diff()
+    view = pd.concat([lv["Date"], lv[[tot] + cols], chg.add_suffix("_c")], axis=1).iloc[1:].tail(n_rows)
+    view = view.iloc[::-1]
+    scale = max(view[f"{tot}_c"].abs().max(), 1)
+    latest = lv.iloc[-1]
+
+    def num(v):
+        return "" if pd.isna(v) or v == 0 else f"{int(v):,}"
+
+    def sgn(v):
+        if pd.isna(v) or v == 0:
+            return ""
+        return f"<span class='{'pos' if v > 0 else 'neg'}'>{int(v):+,}</span>"
+
+    head = ["<div class='rwrap'><table class='rpt'><thead><tr>",
+            "<th class='l'>Date</th><th>TOT</th>"]
+    for p, c in zip(PORT_ORDER, cols):
+        share = latest[c] / latest[tot] * 100 if latest[tot] and pd.notna(latest[c]) else 0
+        head.append(f"<th>{p}<small>{share:.0f}%</small></th>")
+    head.append("<th class='gap'></th><th class='l'>Date</th><th>TOT chg</th>")
+    head += [f"<th>{p}</th>" for p in PORT_ORDER]
+    head.append("</tr></thead><tbody>")
+
+    body = []
+    for _, r in view.iterrows():
+        d = r["Date"].strftime("%d-%b-%y")
+        t = r[f"{tot}_c"]
         bar = ""
-        if chg:
-            w = abs(chg) / scale * 50
-            bar = f"<i class='{'up' if chg > 0 else 'dn'}' style='width:{w:.1f}%'></i>"
-        return (f"<div class='chgcell'><span class='chgval {cls}'>{txt}</span>"
-                f"<div class='chgbar'>{bar}</div></div>")
-
-    d_now, d_prev = last["Date"].strftime("%d %b %Y"), prev["Date"].strftime("%d %b")
-    html = ["<table class='rpt'><thead><tr>",
-            "<th class='l'>Port</th>",
-            f"<th>Certs ({d_now})</th><th>Share</th><th class='gap'></th>",
-            f"<th class='l'>Change vs {d_prev}</th></tr></thead><tbody>"]
-    for name, now, chg in rows:
-        share = f"{now / tot_now * 100:.1f}%" if tot_now else "-"
-        html.append(f"<tr><td class='l'>{name}</td><td>{now:,}</td><td class='share'>{share}</td>"
-                    f"<td class='gap'></td><td class='chg'>{chg_cell(chg)}</td></tr>")
-    html.append(f"<tr class='tot'><td class='l'>Total</td><td>{tot_now:,}</td><td>100%</td>"
-                f"<td class='gap'></td><td class='chg'>{chg_cell(tot_chg)}</td></tr>")
-    html.append("</tbody></table>")
-    return "".join(html)
+        if t:
+            w = abs(t) / scale * 50
+            bar = f"<i class='{'up' if t > 0 else 'dn'}' style='width:{w:.1f}%'></i>"
+        row = [f"<tr><td class='d'>{d}</td><td class='tot'>{num(r[tot])}</td>"]
+        row += [f"<td>{num(r[c])}</td>" for c in cols]
+        row.append("<td class='gap'></td>")
+        row.append(f"<td class='d'>{d}</td><td class='cb'>{bar}<span>{sgn(t)}</span></td>")
+        row += [f"<td>{sgn(r[c + '_c'])}</td>" for c in cols]
+        row.append("</tr>")
+        body.append("".join(row))
+    return "".join(head) + "".join(body) + "</tbody></table></div>"
 
 
 with st.sidebar:
-    st.markdown("<div class='sb-title'>Softs Daily Miner</div>", unsafe_allow_html=True)
+    st.markdown("<div class='sb-title'>Daily Miner</div>", unsafe_allow_html=True)
     st.markdown("<div class='sb-label'>Commodity</div>", unsafe_allow_html=True)
     commodity = st.radio("Commodity", COMMODITIES, label_visibility="collapsed")
 
