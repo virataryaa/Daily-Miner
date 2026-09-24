@@ -1,6 +1,7 @@
 import warnings
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -352,6 +353,39 @@ def monthly_change_html(df: pd.DataFrame, col: str) -> str:
     return "".join(out)
 
 
+DIST_START = "2015-01-01"  # daily-observation era; earlier data is roughly biweekly
+
+
+def distribution_fig(values: pd.Series, title: str, label: str) -> go.Figure:
+    """Histogram (density) with a fitted normal curve and the latest value marked."""
+    vals = values.dropna().astype(float)
+    latest = float(vals.iloc[-1])
+    mu, sd = float(vals.mean()), float(vals.std(ddof=0)) or 1.0
+    xs = np.linspace(vals.min(), vals.max(), 240)
+    pdf = np.exp(-0.5 * ((xs - mu) / sd) ** 2) / (sd * np.sqrt(2 * np.pi))
+    z = (latest - mu) / sd
+    pct = float((vals <= latest).mean() * 100)
+
+    fig = go.Figure()
+    fig.add_trace(go.Histogram(x=vals, histnorm="probability density", nbinsx=40, name="Observed",
+                               marker=dict(color=NAVY, opacity=0.78, line=dict(color="#ffffff", width=0.5)),
+                               hovertemplate="%{x:,.0f}<extra>Observed</extra>"))
+    fig.add_trace(go.Scatter(x=xs, y=pdf, mode="lines", name="Normal fit",
+                             line=dict(color=TEAL, width=2.4), hoverinfo="skip"))
+    fig.add_vline(x=latest, line=dict(color=AMBER, width=2, dash="dash"))
+    chart_layout(fig, title, height=280)
+    fig.update_layout(
+        showlegend=False, hovermode="closest", margin=dict(t=40, b=8, l=8, r=8),
+        yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
+        xaxis=dict(tickformat=",", gridcolor="rgba(10,36,99,0.06)", showline=True, linecolor="#dfe3ee"),
+        annotations=[dict(xref="paper", yref="paper", x=1, y=1.02, xanchor="right", yanchor="bottom", showarrow=False,
+                          text=f"Latest {latest:+,.0f}  |  z {z:+.1f}  |  pctile {pct:.0f}" if label == "chg"
+                          else f"Latest {latest:,.0f}  |  z {z:+.1f}  |  pctile {pct:.0f}",
+                          font=dict(size=11, color="#5a6688"))],
+    )
+    return fig
+
+
 with st.sidebar:
     st.markdown("<div class='sb-title'>Daily Miner</div>", unsafe_allow_html=True)
     st.markdown("<div class='sb-label'>Commodity</div>", unsafe_allow_html=True)
@@ -365,7 +399,7 @@ if commodity == "Coffee":
             certs = load_rc_certs()
             end = certs["Date"].max()
             start = end - pd.DateOffset(years=HISTORY_YEARS)
-            tab_data, tab_visuals, tab_season = st.tabs(["Data Table", "Visuals", "Seasonality"])
+            tab_data, tab_visuals, tab_season = st.tabs(["Data Table", "Visuals", "Seasonality & Distribution"])
             with tab_data:
                 st.markdown(certs_report_html(certs, start, end), unsafe_allow_html=True)
             with tab_visuals:
@@ -401,3 +435,12 @@ if commodity == "Coffee":
                 with s_right:
                     st.markdown(f"<div class='mt side'>Monthly Change: {view_pick}</div>", unsafe_allow_html=True)
                     st.markdown(monthly_change_html(certs, opts[view_pick]), unsafe_allow_html=True)
+                lvl = certs.set_index("Date")[opts[view_pick]].dropna()
+                lvl = lvl[lvl.index >= DIST_START]
+                d1, d2 = st.columns(2)
+                with d1:
+                    st.plotly_chart(distribution_fig(lvl, f"Stock Level Distribution: {view_pick}", "lvl"),
+                                    width="stretch", config={"displayModeBar": False})
+                with d2:
+                    st.plotly_chart(distribution_fig(lvl.diff().dropna(), f"Daily Change Distribution: {view_pick}", "chg"),
+                                    width="stretch", config={"displayModeBar": False})
