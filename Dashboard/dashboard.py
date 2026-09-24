@@ -113,6 +113,10 @@ div[role="radiogroup"] label:has(input:checked) div[data-testid="stMarkdownConta
 .rpt tr:hover td { background: #f3f6ff; }
 .rpt tr:hover td.tot, .rpt tr:hover td.cb { background: #e6ebf7; }
 .pos { color: #1f9d6f; } .neg { color: #c94a4a; }
+.mt { font-size: 14px; font-weight: 600; color: #0a2463; margin: 18px 0 6px; }
+.rpt td.yr { font-weight: 700; color: #0a2463; background: #f0f2f8; }
+.rpt td.na { background: #f6f7fb; }
+.rpt.mx td.cb { min-width: 88px; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -305,6 +309,45 @@ def seasonality_options(df: pd.DataFrame, grade: str = "VG") -> dict:
     return {"Total": f"LRC-TOT-{grade}", **{p: f"LRC-{p}-{grade}" for p in ports}}
 
 
+def monthly_change_html(df: pd.DataFrame, col: str) -> str:
+    """Year x month matrix of month-end-to-month-end change, with in-cell bars
+    and a YEAR total column."""
+    ser = df.set_index("Date")[col].dropna().astype(float)
+    try:
+        me = ser.resample("ME").last()
+    except ValueError:
+        me = ser.resample("M").last()
+    ch = me.ffill().diff().dropna()
+    ch = ch[ch.index.year >= 2009]
+    tbl = ch.groupby([ch.index.year, ch.index.month]).sum().unstack()
+    tbl = tbl.reindex(columns=range(1, 13))
+    year_tot = tbl.sum(axis=1, min_count=1)
+    scale = max(tbl.abs().max().max(), 1)
+    yscale = max(year_tot.abs().max(), 1)
+    months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+
+    def cell(v, sc, cls="cb"):
+        if pd.isna(v):
+            return "<td class='na'></td>"
+        v = int(round(v))
+        if v == 0:
+            return f"<td class='{cls}'><span></span></td>"
+        w = abs(v) / sc * 50
+        bar = f"<i class='{'up' if v > 0 else 'dn'}' style='width:{w:.1f}%'></i>"
+        return f"<td class='{cls}'>{bar}<span class='{'pos' if v > 0 else 'neg'}'>{v:+,}</span></td>"
+
+    out = ["<div class='rwrap' style='height:auto'><table class='rpt mx'><thead><tr class='h2'><th class='dt'>Year</th>"]
+    out += [f"<th>{m}</th>" for m in months] + ["<th class='sep'>Year</th></tr></thead><tbody>"]
+    for yr in tbl.index:
+        row = [f"<tr><td class='d'>{yr}</td>"]
+        row += [cell(tbl.loc[yr, m], scale) for m in range(1, 13)]
+        row.append(cell(year_tot[yr], yscale, "cb sep"))
+        row.append("</tr>")
+        out.append("".join(row))
+    out.append("</tbody></table></div>")
+    return "".join(out)
+
+
 with st.sidebar:
     st.markdown("<div class='sb-title'>Daily Miner</div>", unsafe_allow_html=True)
     st.markdown("<div class='sb-label'>Commodity</div>", unsafe_allow_html=True)
@@ -349,3 +392,5 @@ if commodity == "Coffee":
                 view_pick = st.selectbox("Seasonality", list(opts), key="rc_season_view")
                 st.plotly_chart(seasonality_fig(certs, opts[view_pick], f"Seasonality: {view_pick}"),
                                 width="stretch", config={"displayModeBar": False})
+                st.markdown(f"<div class='mt'>Monthly Change: {view_pick}</div>", unsafe_allow_html=True)
+                st.markdown(monthly_change_html(certs, opts[view_pick]), unsafe_allow_html=True)
