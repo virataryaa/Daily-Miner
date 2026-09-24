@@ -367,13 +367,13 @@ def distribution_fig(values: pd.Series, title: str, label: str) -> go.Figure:
     pct = float((vals <= latest).mean() * 100)
 
     fig = go.Figure()
-    fig.add_trace(go.Histogram(x=vals, histnorm="probability density", nbinsx=40, name="Observed",
+    fig.add_trace(go.Histogram(x=vals, histnorm="probability density", nbinsx=90, name="Observed",
                                marker=dict(color=NAVY, opacity=0.78, line=dict(color="#ffffff", width=0.5)),
                                hovertemplate="%{x:,.0f}<extra>Observed</extra>"))
     fig.add_trace(go.Scatter(x=xs, y=pdf, mode="lines", name="Normal fit",
                              line=dict(color=TEAL, width=2.4), hoverinfo="skip"))
     fig.add_vline(x=latest, line=dict(color=AMBER, width=2, dash="dash"))
-    chart_layout(fig, title, height=280)
+    chart_layout(fig, title, height=400)
     fig.update_layout(
         showlegend=False, hovermode="closest", margin=dict(t=40, b=8, l=8, r=8),
         yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
@@ -437,7 +437,8 @@ if commodity == "Coffee":
                     st.markdown(monthly_change_html(certs, opts[view_pick]), unsafe_allow_html=True)
                 lvl = certs.set_index("Date")[opts[view_pick]].dropna()
                 lvl = lvl[lvl.index >= DIST_START]
-                d1, d2 = st.columns(2)
+                st.markdown("<div style='height:36px'></div>", unsafe_allow_html=True)
+                d1, d2, _ = st.columns(3)
                 with d1:
                     st.plotly_chart(distribution_fig(lvl, f"Stock Level Distribution: {view_pick}", "lvl"),
                                     width="stretch", config={"displayModeBar": False})
