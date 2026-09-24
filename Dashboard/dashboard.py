@@ -47,13 +47,13 @@ body, .main { color: #1a1a2e; }
     display: inline-flex;
 }
 .stTabs [data-baseweb="tab-list"] { margin-bottom: 6px; }
-.stTabs [data-baseweb="tab"] p { font-size: 14px !important; }
+.stTabs [data-baseweb="tab"] p { font-size: 16px !important; }
 .stTabs [data-baseweb="tab"] {
     background: transparent !important;
     color: #5a6688 !important;
     border-radius: 999px !important;
-    padding: 7px 22px !important;
-    font-size: 14px !important;
+    padding: 8px 24px !important;
+    font-size: 16px !important;
     min-height: 0 !important;
     height: auto !important;
     font-weight: 600;
@@ -80,8 +80,8 @@ div[role="radiogroup"] label:has(input:checked) div[data-testid="stMarkdownConta
 
 /* Sub-tabs (nested) stay smaller than the main tabs */
 .stTabs .stTabs [data-baseweb="tab-list"] { padding: 2px; }
-.stTabs .stTabs [data-baseweb="tab"] { padding: 3px 11px !important; font-size: 11px !important; }
-.stTabs .stTabs [data-baseweb="tab"] p { font-size: 11px !important; }
+.stTabs .stTabs [data-baseweb="tab"] { padding: 5px 15px !important; font-size: 14px !important; }
+.stTabs .stTabs [data-baseweb="tab"] p { font-size: 14px !important; }
 
 /* Commodity selector: larger stacked pills */
 [data-testid="stSidebar"] div[role="radiogroup"] { flex-direction: column; align-items: stretch; width: 100%; border-radius: 22px; padding: 5px; gap: 3px; }
