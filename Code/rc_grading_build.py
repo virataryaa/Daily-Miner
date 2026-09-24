@@ -8,8 +8,8 @@ source is the Excel feed exported from the exchange. This script only cleans it:
   - PanelDate: real dates, or Excel serial numbers (older exports), both handled
   - strip padded strings (Origin), normalise Commodity to 'RC'
   - Class blank -> 'NA' (non-tenderable, Tenderable = N)
-  - NO de-duplication: identical rows can be genuine separate entries and the desk's own
-    pivot sums every row, so totals here match it
+  - exact duplicate rows dropped (Excel rows 1211-1224 of the current feed re-paste rows 1195-1208:
+    Indonesia / ANT, 14-23 Jan 2026, 578 lots double-counted)
 Tidy long table: one row per panel x exchange x origin x port x class x tenderable x allowance.
 
 Run:  python rc_grading_build.py
@@ -38,7 +38,10 @@ def main():
     g["Allowance"] = pd.to_numeric(g["Allowance"], errors="coerce").fillna(0).astype(int)
     g["NoLots"] = pd.to_numeric(g["NoLots"], errors="coerce").fillna(0).astype(int)
     g = g.drop(columns=["PanelTime"])
-    g = g.sort_values(["PanelDate", "UKContUS", "Origin", "PortId", "Class"]).reset_index(drop=True)
+    n0 = len(g)
+    g = g.drop_duplicates().sort_values(["PanelDate", "UKContUS", "Origin", "PortId", "Class"]).reset_index(drop=True)
+    if n0 != len(g):
+        print(f"[RC grading] dropped {n0 - len(g)} exact duplicate rows")
     g.to_parquet(OUT, index=False)
     print(f"[RC grading] {len(g)} rows, {g['PanelDate'].nunique()} panel dates, "
           f"{g['PanelDate'].min().date()} -> {g['PanelDate'].max().date()}, {int(g['NoLots'].sum()):,} lots")
