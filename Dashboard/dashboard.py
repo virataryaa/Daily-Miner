@@ -1,6 +1,7 @@
 import warnings
 from pathlib import Path
 
+import pandas as pd
 import streamlit as st
 
 warnings.filterwarnings("ignore")
@@ -64,33 +65,106 @@ div[role="radiogroup"] label:has(input:checked) { background: #0a2463 !important
 div[role="radiogroup"] label:has(input:checked) div[data-testid="stMarkdownContainer"] p { color: #ffffff !important; font-weight: 600; }
 
 .stDataFrame { background: #ffffff; }
-.card-desc { color: #5a6688; font-size: 0.82rem; margin-top: -6px; margin-bottom: 10px; }
 
 /* Sidebar title (hero text) */
 .sb-title { font-family: 'Fraunces', Georgia, serif; font-size: 1.5rem; font-weight: 600; color: #0a2463; margin-bottom: 2px; }
-.sb-caption { font-size: 11px; color: #7a86a8; margin-bottom: 16px; line-height: 1.4; }
 .sb-label { font-size: 11px; color: #7a86a8; text-transform: uppercase; letter-spacing: .06em; margin: 6px 0 4px; }
+
+/* Certs report table */
+.rpt { width: 100%; border-collapse: separate; border-spacing: 0; background: #ffffff; border: 1px solid #dfe3ee; border-radius: 12px; overflow: hidden; font-size: 13px; }
+.rpt th { background: #0a2463; color: #ffffff; font-weight: 600; text-align: right; padding: 10px 14px; font-size: 12px; letter-spacing: .03em; }
+.rpt th.l, .rpt td.l { text-align: left; }
+.rpt th.gap { background: #0a2463; width: 18px; padding: 0; }
+.rpt td { padding: 9px 14px; text-align: right; border-bottom: 1px solid #eef0f6; color: #1a1a2e; font-variant-numeric: tabular-nums; }
+.rpt td.l { font-weight: 600; color: #0a2463; }
+.rpt td.gap { border-bottom: 1px solid #eef0f6; padding: 0; }
+.rpt tr:last-child td { border-bottom: none; }
+.rpt tr.tot td { background: #f0f2f8; font-weight: 700; color: #0a2463; }
+.rpt td.chg { width: 260px; padding: 6px 14px; }
+.chgcell { display: flex; align-items: center; gap: 10px; }
+.chgval { width: 52px; text-align: right; font-weight: 600; }
+.chgbar { position: relative; flex: 1; height: 16px; }
+.chgbar::before { content: ''; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: #c5cbdd; }
+.chgbar i { position: absolute; top: 2px; bottom: 2px; border-radius: 3px; }
+.chgbar i.up { left: 50%; background: #1f9d6f; }
+.chgbar i.dn { right: 50%; background: #c94a4a; }
+.pos { color: #1f9d6f; } .neg { color: #c94a4a; } .zero { color: #8a94a8; }
+.share { color: #5a6688; }
 </style>
 """,
     unsafe_allow_html=True,
 )
 
+
 COMMODITIES = ["Coffee", "Cocoa", "Sugar"]
+
+PORT_NAMES = {
+    "ANT": "Antwerp", "LON": "London", "FEL": "Felixstowe", "LIV": "Liverpool",
+    "AMS": "Amsterdam", "ROT": "Rotterdam", "HAM": "Hamburg", "BRE": "Bremen",
+    "BAR": "Barcelona", "GEN": "Genoa", "TRI": "Trieste", "NOR": "Northern",
+}
+
+
+@st.cache_data(ttl=600)
+def load_rc_certs() -> pd.DataFrame:
+    df = pd.read_parquet(DB_DIR / "rc_certs.parquet")
+    df["Date"] = pd.to_datetime(df["Date"])
+    return df.sort_values("Date").reset_index(drop=True)
+
+
+def fmt_int(v):
+    return "-" if pd.isna(v) else f"{int(v):,}"
+
+
+def certs_report_html(df: pd.DataFrame, grade: str = "VG") -> str:
+    """Certs by port (latest) with day-over-day change as in-cell bars."""
+    last, prev = df.iloc[-1], df.iloc[-2]
+    tot_col = f"LRC-TOT-{grade}"
+    ports = [p for p in PORT_NAMES if f"LRC-{p}-{grade}" in df.columns]
+    ports = [p for p in ports if (last[f"LRC-{p}-{grade}"] or 0) != 0 or (prev[f"LRC-{p}-{grade}"] or 0) != 0]
+    rows = []
+    for p in ports:
+        c = f"LRC-{p}-{grade}"
+        now = 0 if pd.isna(last[c]) else int(last[c])
+        was = 0 if pd.isna(prev[c]) else int(prev[c])
+        rows.append((PORT_NAMES[p], now, now - was))
+    rows.sort(key=lambda r: -r[1])
+    tot_now, tot_chg = int(last[tot_col]), int(last[tot_col] - prev[tot_col])
+    scale = max([abs(r[2]) for r in rows] + [1])
+
+    def chg_cell(chg):
+        cls = "pos" if chg > 0 else "neg" if chg < 0 else "zero"
+        txt = f"{chg:+,}" if chg else "0"
+        bar = ""
+        if chg:
+            w = abs(chg) / scale * 50
+            bar = f"<i class='{'up' if chg > 0 else 'dn'}' style='width:{w:.1f}%'></i>"
+        return (f"<div class='chgcell'><span class='chgval {cls}'>{txt}</span>"
+                f"<div class='chgbar'>{bar}</div></div>")
+
+    d_now, d_prev = last["Date"].strftime("%d %b %Y"), prev["Date"].strftime("%d %b")
+    html = ["<table class='rpt'><thead><tr>",
+            "<th class='l'>Port</th>",
+            f"<th>Certs ({d_now})</th><th>Share</th><th class='gap'></th>",
+            f"<th class='l'>Change vs {d_prev}</th></tr></thead><tbody>"]
+    for name, now, chg in rows:
+        share = f"{now / tot_now * 100:.1f}%" if tot_now else "-"
+        html.append(f"<tr><td class='l'>{name}</td><td>{now:,}</td><td class='share'>{share}</td>"
+                    f"<td class='gap'></td><td class='chg'>{chg_cell(chg)}</td></tr>")
+    html.append(f"<tr class='tot'><td class='l'>Total</td><td>{tot_now:,}</td><td>100%</td>"
+                f"<td class='gap'></td><td class='chg'>{chg_cell(tot_chg)}</td></tr>")
+    html.append("</tbody></table>")
+    return "".join(html)
+
 
 with st.sidebar:
     st.markdown("<div class='sb-title'>Softs Daily Miner</div>", unsafe_allow_html=True)
-    st.markdown(
-        "<div class='sb-caption'>Daily fundamentals: certified stocks and grading across the softs complex.</div>",
-        unsafe_allow_html=True,
-    )
     st.markdown("<div class='sb-label'>Commodity</div>", unsafe_allow_html=True)
     commodity = st.radio("Commodity", COMMODITIES, label_visibility="collapsed")
 
 if commodity == "Coffee":
     tab_arabica, tab_robusta = st.tabs(["Arabica", "Robusta"])
-    with tab_arabica:
-        st.markdown("<div class='card-desc'>Arabica (KC): coming next.</div>", unsafe_allow_html=True)
     with tab_robusta:
-        st.markdown("<div class='card-desc'>Robusta (LRC): certified stocks and grading.</div>", unsafe_allow_html=True)
-else:
-    st.markdown(f"<div class='card-desc'>{commodity}: not built yet.</div>", unsafe_allow_html=True)
+        sub_certs, sub_grading, sub_both = st.tabs(["Certs", "Grading", "Certs & Grading"])
+        with sub_certs:
+            st.markdown(certs_report_html(load_rc_certs()), unsafe_allow_html=True)
