@@ -344,7 +344,9 @@ if commodity == "Coffee":
                     st.plotly_chart(total_certs_fig(cview), width="stretch", config={"displayModeBar": False})
                 with ch2:
                     st.plotly_chart(ports_certs_fig(cview), width="stretch", config={"displayModeBar": False})
-                opts = seasonality_options(certs)
-                view_pick = st.selectbox("Seasonality", list(opts), key="rc_season_view")
-                st.plotly_chart(seasonality_fig(certs, opts[view_pick], f"Seasonality: {view_pick}"),
-                                width="stretch", config={"displayModeBar": False})
+                s1, _ = st.columns(2)
+                with s1:
+                    opts = seasonality_options(certs)
+                    view_pick = st.selectbox("Seasonality", list(opts), key="rc_season_view")
+                    st.plotly_chart(seasonality_fig(certs, opts[view_pick], f"Seasonality: {view_pick}"),
+                                    width="stretch", config={"displayModeBar": False})
