@@ -121,7 +121,8 @@ def certs_report_html(df: pd.DataFrame, grade: str = "VG") -> str:
     last, prev = df.iloc[-1], df.iloc[-2]
     tot_col = f"LRC-TOT-{grade}"
     ports = [p for p in PORT_NAMES if f"LRC-{p}-{grade}" in df.columns]
-    ports = [p for p in ports if (last[f"LRC-{p}-{grade}"] or 0) != 0 or (prev[f"LRC-{p}-{grade}"] or 0) != 0]
+    ports = [p for p in ports if pd.notna(last[f"LRC-{p}-{grade}"]) and last[f"LRC-{p}-{grade}"] != 0
+             or pd.notna(prev[f"LRC-{p}-{grade}"]) and prev[f"LRC-{p}-{grade}"] != 0]
     rows = []
     for p in ports:
         c = f"LRC-{p}-{grade}"
