@@ -116,10 +116,10 @@ div[role="radiogroup"] label:has(input:checked) div[data-testid="stMarkdownConta
 .mt { font-size: 14px; font-weight: 600; color: #0a2463; margin: 18px 0 6px; }
 .rpt td.yr { font-weight: 700; color: #0a2463; background: #f0f2f8; }
 .rpt td.na { background: #f6f7fb; }
-.rpt.mx { font-size: 10px; }
-.rpt.mx td { padding: 2px 4px; }
-.rpt.mx thead th { padding: 3px 4px; font-size: 9.5px; }
-.rpt.mx td.cb { min-width: 46px; }
+.rpt.mx { font-size: 11px; }
+.rpt.mx td { padding: 3px 6px; }
+.rpt.mx thead th { top: 0 !important; padding: 4px 6px; font-size: 10.5px; }
+.rpt.mx td.cb { min-width: 58px; }
 .mt.side { margin-top: 30px; }
 </style>
 """,
@@ -273,13 +273,12 @@ def ports_certs_fig(df: pd.DataFrame, grade: str = "VG") -> go.Figure:
 
 
 def seasonality_fig(df: pd.DataFrame, col: str, title: str) -> go.Figure:
-    """Week-of-year seasonality: history bands (min-max, 10-90, 25-75 pct), average,
+    """Day-of-year seasonality: history bands (min-max, 10-90, 25-75 pct), average,
     last year in red and the current year in navy (same styling as Cotton On-Call)."""
     s = df.set_index("Date")[col].dropna().astype(float)
-    w = s.resample("W").last().ffill().to_frame("v")
-    iso = w.index.isocalendar()
-    w["x"], w["yr"] = iso.week.astype(int).values, iso.year.astype(int).values
-    w = w[w["x"] <= 52]
+    w = s.resample("D").last().ffill().to_frame("v")
+    w["x"], w["yr"] = w.index.dayofyear, w.index.year
+    w = w[w["x"] <= 365]
     cur = int(w["yr"].max())
     hist = w[w["yr"] < cur]
     band = hist.groupby("x")["v"].agg(
@@ -301,7 +300,8 @@ def seasonality_fig(df: pd.DataFrame, col: str, title: str) -> go.Figure:
             fig.add_trace(go.Scatter(x=g["x"], y=g["v"], mode="lines", name=str(yr), line=dict(color=color, width=width),
                                      hovertemplate="%{y:,.0f}<extra>" + str(yr) + "</extra>"))
     chart_layout(fig, title, height=440)
-    fig.update_layout(xaxis=dict(title="Week of year", dtick=4, range=[1, 52]))
+    fig.update_layout(xaxis=dict(title="Day of year", dtick=30, range=[1, 365]),
+                      legend=dict(y=-0.28))
     return fig
 
 
@@ -393,7 +393,7 @@ if commodity == "Coffee":
                     st.plotly_chart(ports_certs_fig(cview), width="stretch", config={"displayModeBar": False})
             with tab_season:
                 opts = seasonality_options(certs)
-                s_left, s_right = st.columns(2)
+                s_left, s_right = st.columns([2, 3])
                 with s_left:
                     view_pick = st.selectbox("Seasonality", list(opts), key="rc_season_view")
                     st.plotly_chart(seasonality_fig(certs, opts[view_pick], f"Seasonality: {view_pick}"),
