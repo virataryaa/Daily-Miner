@@ -116,7 +116,11 @@ div[role="radiogroup"] label:has(input:checked) div[data-testid="stMarkdownConta
 .mt { font-size: 14px; font-weight: 600; color: #0a2463; margin: 18px 0 6px; }
 .rpt td.yr { font-weight: 700; color: #0a2463; background: #f0f2f8; }
 .rpt td.na { background: #f6f7fb; }
-.rpt.mx td.cb { min-width: 88px; }
+.rpt.mx { font-size: 10px; }
+.rpt.mx td { padding: 2px 4px; }
+.rpt.mx thead th { padding: 3px 4px; font-size: 9.5px; }
+.rpt.mx td.cb { min-width: 46px; }
+.mt.side { margin-top: 30px; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -389,10 +393,11 @@ if commodity == "Coffee":
                     st.plotly_chart(ports_certs_fig(cview), width="stretch", config={"displayModeBar": False})
             with tab_season:
                 opts = seasonality_options(certs)
-                s_left, _ = st.columns(2)
+                s_left, s_right = st.columns(2)
                 with s_left:
                     view_pick = st.selectbox("Seasonality", list(opts), key="rc_season_view")
                     st.plotly_chart(seasonality_fig(certs, opts[view_pick], f"Seasonality: {view_pick}"),
                                     width="stretch", config={"displayModeBar": False})
-                st.markdown(f"<div class='mt'>Monthly Change: {view_pick}</div>", unsafe_allow_html=True)
-                st.markdown(monthly_change_html(certs, opts[view_pick]), unsafe_allow_html=True)
+                with s_right:
+                    st.markdown(f"<div class='mt side'>Monthly Change: {view_pick}</div>", unsafe_allow_html=True)
+                    st.markdown(monthly_change_html(certs, opts[view_pick]), unsafe_allow_html=True)
