@@ -91,6 +91,13 @@ div[role="radiogroup"] label:has(input:checked) div[data-testid="stMarkdownConta
 [data-testid="stSidebar"] div[role="radiogroup"] label { padding: 8px 18px !important; }
 [data-testid="stSidebar"] div[role="radiogroup"] label div[data-testid="stMarkdownContainer"] p { font-size: 15px !important; }
 
+/* Multiselect: navy tags, white dropdown */
+span[data-baseweb="tag"], span[data-baseweb="tag"] div, span[data-baseweb="tag"] span { background-color: #0a2463 !important; color: #ffffff !important; }
+span[data-baseweb="tag"] svg { fill: #ffffff !important; }
+[data-baseweb="popover"] [data-baseweb="menu"] { background: #ffffff !important; }
+[data-baseweb="popover"] [data-baseweb="menu"] li, [data-baseweb="popover"] [data-baseweb="menu"] li * { color: #1a1a2e !important; }
+[data-baseweb="select"] > div { background: #ffffff !important; color: #1a1a2e !important; }
+
 /* Certs report table */
 .rwrap { height: 60vh; overflow: auto; border: 1px solid #dfe3ee; border-radius: 12px; background: #ffffff; width: fit-content; max-width: 100%; }
 .rpt { width: max-content; border-collapse: separate; border-spacing: 0; font-size: 11px; line-height: 1.25; font-variant-numeric: tabular-nums; }
@@ -303,21 +310,33 @@ def rolling_fig(series: pd.Series, n: int, start: pd.Timestamp, end: pd.Timestam
     return fig
 
 
-def share_area_fig(df: pd.DataFrame, grade: str = "VG") -> go.Figure:
-    """100% stacked area of each port's share; minor ports pooled into Other."""
-    majors = major_ports(df, grade)
-    minors = [p for p in PORT_ORDER if p not in majors]
+def rolling_ports_fig(df: pd.DataFrame, ports: list, n: int, start: pd.Timestamp, end: pd.Timestamp,
+                      grade: str = "VG") -> go.Figure:
+    """Rolling n-observation change, one line per chosen port."""
     fig = go.Figure()
-    for p in reversed(majors):
-        s = df[["Date", f"LRC-{p}-{grade}"]].dropna()
-        fig.add_trace(go.Scatter(x=s["Date"], y=s[f"LRC-{p}-{grade}"], mode="lines", name=p, stackgroup="one",
-                                 groupnorm="percent", line=dict(width=0.6, color=PORT_COLORS.get(p, GREY)),
-                                 fillcolor=PORT_COLORS.get(p, GREY), hovertemplate="%{y:.1f}%<extra>" + p + "</extra>"))
-    if minors:
-        other = df[[f"LRC-{p}-{grade}" for p in minors]].astype(float).sum(axis=1, min_count=1)
-        fig.add_trace(go.Scatter(x=df["Date"], y=other, mode="lines", name="Other", stackgroup="one",
-                                 groupnorm="percent", line=dict(width=0.6, color="#c5cbdd"), fillcolor="#c5cbdd",
-                                 hovertemplate="%{y:.1f}%<extra>Other</extra>"))
+    for p in ports:
+        r = df.set_index("Date")[f"LRC-{p}-{grade}"].dropna().astype(float).diff(n).dropna()
+        r = r[(r.index >= start) & (r.index <= end)]
+        fig.add_trace(go.Scatter(x=r.index, y=r.values, mode="lines", name=p,
+                                 line=dict(color=PORT_COLORS.get(p, GREY), width=2.0),
+                                 hovertemplate="%{y:+,.0f}<extra>" + p + "</extra>"))
+    fig.add_hline(y=0, line=dict(color="#c5cbdd", width=1))
+    label = ", ".join(ports) if ports else "no port selected"
+    chart_layout(fig, f"Rolling Change: {label} ({n}d)", height=340)
+    fig.update_layout(yaxis=dict(tickformat="+,"), showlegend=len(ports) > 1)
+    return fig
+
+
+def share_line_fig(df: pd.DataFrame, grade: str = "VG") -> go.Figure:
+    """Each major port's share of total certs (%) over time, as lines."""
+    tot = df[f"LRC-TOT-{grade}"].astype(float).where(lambda v: v > 0)
+    fig = go.Figure()
+    for p in major_ports(df, grade):
+        share = (df[f"LRC-{p}-{grade}"].astype(float) / tot * 100)
+        ok = share.notna()
+        fig.add_trace(go.Scatter(x=df["Date"][ok], y=share[ok], mode="lines", name=p,
+                                 line=dict(color=PORT_COLORS.get(p, GREY), width=2.0),
+                                 hovertemplate="%{y:.1f}%<extra>" + p + "</extra>"))
     chart_layout(fig, "Port Share of Total", height=340)
     fig.update_layout(yaxis=dict(ticksuffix="%", range=[0, 100]))
     return fig
@@ -485,7 +504,7 @@ if commodity == "Coffee":
                 st.markdown(certs_report_html(certs, start, end), unsafe_allow_html=True)
             with tab_visuals:
                 c_min, c_max = certs["Date"].min(), certs["Date"].max()
-                span = st.radio("History", ["1Y", "3Y", "5Y", "All", "Custom"], horizontal=True,
+                span = st.radio("History", ["1Y", "3Y", "5Y", "All", "Custom"], index=2, horizontal=True,
                                 label_visibility="collapsed", key="rc_chart_span")
                 if span == "Custom":
                     cs, ce, _ = st.columns([1, 1, 4])
@@ -514,17 +533,18 @@ if commodity == "Coffee":
                                       format_func=lambda n: f"Rolling {n}d", label_visibility="collapsed",
                                       key="rc_roll_n")
                 with r2:
-                    roll_port = st.selectbox("Rolling port", port_opts, key="rc_roll_port", label_visibility="collapsed")
+                    roll_ports = st.multiselect("Rolling ports", port_opts, default=port_opts[:1], key="rc_roll_ports",
+                                                label_visibility="collapsed", placeholder="Choose ports")
                 r3, r4 = st.columns(2)
                 with r3:
                     st.plotly_chart(rolling_fig(certs.set_index("Date")["LRC-TOT-VG"], roll_n, c_start, c_end,
                                                 f"Rolling Change: Total ({roll_n}d)"), width="stretch", config=cfg)
                 with r4:
-                    st.plotly_chart(rolling_fig(certs.set_index("Date")[f"LRC-{roll_port}-VG"], roll_n, c_start, c_end,
-                                                f"Rolling Change: {roll_port} ({roll_n}d)"), width="stretch", config=cfg)
+                    st.plotly_chart(rolling_ports_fig(certs, roll_ports, roll_n, c_start, c_end),
+                                    width="stretch", config=cfg)
                 sh1, sh2 = st.columns(2)
                 with sh1:
-                    st.plotly_chart(share_area_fig(cview), width="stretch", config=cfg)
+                    st.plotly_chart(share_line_fig(cview), width="stretch", config=cfg)
                 with sh2:
                     st.plotly_chart(share_pie_fig(certs), width="stretch", config=cfg)
             with tab_season:

@@ -22,8 +22,9 @@ OUT = ROOT / "Database" / "rc_certs.parquet"
 FIX_LOG = ROOT / "Database" / "rc_certs_fixes.csv"
 START = "2000-01-01"
 OVERLAP_DAYS = 45
-GLITCH_MAX_RUN = 5      # a port at 0 for at most this many observations...
-GLITCH_MIN_LEVEL = 200  # ...while it holds at least this many on both sides = feed glitch
+# Known feed glitches, fixed by linear interpolation between the last good day before and the first good day after.
+# (RIC, first bad date, last bad date)
+KNOWN_FIXES = [("LRC-LON-VG", "2020-01-08", "2020-01-09")]  # LON dropped to 0 for 2 days while TOT stayed flat
 
 PORTS = ["AMS", "ANT", "BAR", "BRE", "FEL", "GEN", "HAM", "LIV", "LON", "NOR", "ROT", "TRI", "TOT"]
 GRADES = ["VG", "NT", "CL"]
@@ -44,34 +45,23 @@ def get_hist(rics, field, start, end):
     return raw
 
 
-def fix_zero_glitches(df):
-    """Interpolate short runs where a port drops to 0 and comes straight back
-    (e.g. LON 2020-01-08/09: 4,925 -> 0 -> 4,925 while TOT stayed flat).
-    Returns (cleaned df, list of fix records). Idempotent."""
+def apply_known_fixes(df):
+    """Interpolate only the KNOWN_FIXES cells. Everything else is left as delivered. Idempotent."""
     df = df.sort_values("Date").reset_index(drop=True)
     fixes = []
-    for col in [c for c in df.columns if c.startswith("LRC-") and "-TOT-" not in c and not c.startswith("LRC-TOT")]:
-        v = df[col].astype("float64")
-        i, n = 0, len(v)
-        while i < n:
-            if v.iloc[i] == 0:
-                j = i
-                while j + 1 < n and v.iloc[j + 1] == 0:
-                    j += 1
-                before = v.iloc[i - 1] if i > 0 else float("nan")
-                after = v.iloc[j + 1] if j + 1 < n else float("nan")
-                if (j - i + 1) <= GLITCH_MAX_RUN and before >= GLITCH_MIN_LEVEL and after >= GLITCH_MIN_LEVEL:
-                    for k in range(i, j + 1):
-                        frac = (k - i + 1) / (j - i + 2)
-                        new = round(before + (after - before) * frac)
-                        fixes.append({"Date": df["Date"].iloc[k].date(), "RIC": col, "raw": 0, "interpolated": new})
-                        df.loc[k, col] = new
-                i = j + 1
-            else:
-                i += 1
-    for col in df.columns:
-        if col != "Date" and df[col].dtype != "Int64" and col != "LRC_Price":
-            df[col] = df[col].astype("Int64")
+    for ric, d0, d1 in KNOWN_FIXES:
+        if ric not in df.columns:
+            continue
+        bad = (df["Date"] >= pd.Timestamp(d0)) & (df["Date"] <= pd.Timestamp(d1))
+        idx = list(df.index[bad])
+        if not idx or idx[0] == 0 or idx[-1] + 1 >= len(df):
+            continue
+        before, after = float(df.loc[idx[0] - 1, ric]), float(df.loc[idx[-1] + 1, ric])
+        for k, i in enumerate(idx, start=1):
+            new = round(before + (after - before) * k / (len(idx) + 1))
+            fixes.append({"Date": df.loc[i, "Date"].date(), "RIC": ric, "raw": df.loc[i, ric], "interpolated": new})
+            df.loc[i, ric] = new
+    df[[c for c in df.columns if c != "Date" and c != "LRC_Price"]] = df[[c for c in df.columns if c != "Date" and c != "LRC_Price"]].astype("Int64")
     return df, fixes
 
 
@@ -120,10 +110,10 @@ def main():
     new = (new.drop_duplicates("Date", keep="last").sort_values("Date").reset_index(drop=True))
     cols = ["Date"] + [c for c in CERT_RICS if c in new.columns] + ["LRC_Price"]
     new = new.reindex(columns=cols)
-    new, fixes = fix_zero_glitches(new)
+    new, fixes = apply_known_fixes(new)
     if fixes:
         pd.DataFrame(fixes).to_csv(FIX_LOG, index=False)
-        print(f"[RC certs] interpolated {len(fixes)} glitch value(s), logged to {FIX_LOG.name}")
+        print(f"[RC certs] interpolated {len(fixes)} known-glitch value(s), logged to {FIX_LOG.name}")
     new.to_parquet(OUT, index=False)
     print(f"[RC certs] saved {OUT.name}: {len(new)} rows, {new['Date'].min().date()} -> {new['Date'].max().date()}")
 
