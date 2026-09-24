@@ -188,13 +188,13 @@ PORT_COLORS = {
 }
 
 
-def chart_layout(fig, title, height=340):
+def chart_layout(fig, title, height=380):
     fig.update_layout(
         template="plotly_white", height=height, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         font=dict(color="#1a1a2e", size=12),
         title=dict(text=title, font=dict(size=14, color=NAVY), x=0, xanchor="left"),
-        margin=dict(t=44, b=24, l=8, r=8), hovermode="x unified",
-        legend=dict(orientation="h", y=1.02, x=1, xanchor="right", yanchor="bottom",
+        margin=dict(t=40, b=8, l=8, r=8), hovermode="x unified",
+        legend=dict(orientation="h", y=-0.12, x=0, xanchor="left", yanchor="top",
                     bgcolor="rgba(0,0,0,0)", font=dict(size=11)),
         xaxis=dict(gridcolor="rgba(10,36,99,0.06)", color="#4a5578", showline=True, linecolor="#dfe3ee"),
         yaxis=dict(gridcolor="rgba(10,36,99,0.08)", color="#4a5578", tickformat=",", zeroline=False),
@@ -207,8 +207,8 @@ def total_certs_fig(df: pd.DataFrame, grade: str = "VG") -> go.Figure:
     fig = go.Figure(go.Scatter(
         x=s["Date"], y=s[f"LRC-TOT-{grade}"], mode="lines", name="Total certs",
         line=dict(color=NAVY, width=2), fill="tozeroy", fillcolor="rgba(10,36,99,0.07)",
-        hovertemplate="%{y:,.0f} bags<extra></extra>"))
-    return chart_layout(fig, "Total Certs (bags)")
+        hovertemplate="%{y:,.0f}<extra></extra>"))
+    return chart_layout(fig, "Total Certs")
 
 
 def ports_certs_fig(df: pd.DataFrame, grade: str = "VG") -> go.Figure:
@@ -222,7 +222,7 @@ def ports_certs_fig(df: pd.DataFrame, grade: str = "VG") -> go.Figure:
             x=s["Date"], y=s[c], mode="lines", name=p,
             line=dict(color=PORT_COLORS.get(p, GREY), width=1.8),
             hovertemplate="%{y:,.0f}<extra>" + p + "</extra>"))
-    return chart_layout(fig, "Certs Per Port (bags)")
+    return chart_layout(fig, "Certs Per Port")
 
 
 with st.sidebar:
@@ -239,8 +239,25 @@ if commodity == "Coffee":
             end = certs["Date"].max()
             start = end - pd.DateOffset(years=HISTORY_YEARS)
             st.markdown(certs_report_html(certs, start, end), unsafe_allow_html=True)
+            c_min, c_max = certs["Date"].min(), certs["Date"].max()
+            span = st.radio("History", ["1Y", "3Y", "5Y", "All", "Custom"], horizontal=True,
+                            label_visibility="collapsed", key="rc_chart_span")
+            if span == "Custom":
+                cs, ce, _ = st.columns([1, 1, 4])
+                with cs:
+                    c_from = st.date_input("Start date", value=(c_max - pd.DateOffset(years=3)).date(),
+                                           min_value=c_min.date(), max_value=c_max.date(), key="rc_chart_from")
+                with ce:
+                    c_to = st.date_input("End date", value=c_max.date(),
+                                         min_value=c_min.date(), max_value=c_max.date(), key="rc_chart_to")
+                c_start, c_end = pd.Timestamp(c_from), pd.Timestamp(c_to)
+            elif span == "All":
+                c_start, c_end = c_min, c_max
+            else:
+                c_start, c_end = c_max - pd.DateOffset(years=int(span[0])), c_max
+            cview = certs[(certs["Date"] >= c_start) & (certs["Date"] <= c_end)]
             ch1, ch2 = st.columns(2)
             with ch1:
-                st.plotly_chart(total_certs_fig(certs), width="stretch", config={"displayModeBar": False})
+                st.plotly_chart(total_certs_fig(cview), width="stretch", config={"displayModeBar": False})
             with ch2:
-                st.plotly_chart(ports_certs_fig(certs), width="stretch", config={"displayModeBar": False})
+                st.plotly_chart(ports_certs_fig(cview), width="stretch", config={"displayModeBar": False})
