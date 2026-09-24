@@ -27,8 +27,8 @@ st.markdown(
 [data-testid="stAppViewContainer"], [data-testid="stMain"], .main {
     background: #fafafa !important;
 }
-[data-testid="stHeader"] { background: #fafafa !important; height: 2rem !important; }
-.block-container { padding-top: 1.2rem !important; padding-bottom: 1rem !important; }
+[data-testid="stHeader"] { background: #fafafa !important; }
+.block-container { padding-top: 3.2rem !important; padding-bottom: 1rem !important; }
 [data-testid="stSidebarUserContent"] { padding-top: 1rem !important; }
 [data-testid="stSidebar"] {
     background: #f0f2f8 !important;
