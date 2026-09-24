@@ -241,6 +241,6 @@ if commodity == "Coffee":
             st.markdown(certs_report_html(certs, start, end), unsafe_allow_html=True)
             ch1, ch2 = st.columns(2)
             with ch1:
-                st.plotly_chart(total_certs_fig(certs), use_container_width=True, config={"displayModeBar": False})
+                st.plotly_chart(total_certs_fig(certs), width="stretch", config={"displayModeBar": False})
             with ch2:
-                st.plotly_chart(ports_certs_fig(certs), use_container_width=True, config={"displayModeBar": False})
+                st.plotly_chart(ports_certs_fig(certs), width="stretch", config={"displayModeBar": False})
