@@ -47,13 +47,13 @@ body, .main { color: #1a1a2e; }
     display: inline-flex;
 }
 .stTabs [data-baseweb="tab-list"] { margin-bottom: 6px; }
-.stTabs [data-baseweb="tab"] p { font-size: 12px !important; }
+.stTabs [data-baseweb="tab"] p { font-size: 14px !important; }
 .stTabs [data-baseweb="tab"] {
     background: transparent !important;
     color: #5a6688 !important;
     border-radius: 999px !important;
-    padding: 4px 13px !important;
-    font-size: 12px !important;
+    padding: 7px 22px !important;
+    font-size: 14px !important;
     min-height: 0 !important;
     height: auto !important;
     font-weight: 600;
@@ -76,6 +76,17 @@ div[role="radiogroup"] label:has(input:checked) div[data-testid="stMarkdownConta
 /* Sidebar title (hero text) */
 .sb-title { font-family: 'Fraunces', Georgia, serif; font-size: 1.5rem; font-weight: 600; color: #0a2463; margin-bottom: 2px; }
 .sb-label { font-size: 11px; color: #7a86a8; text-transform: uppercase; letter-spacing: .06em; margin: 6px 0 4px; }
+
+
+/* Sub-tabs (nested) stay smaller than the main tabs */
+.stTabs .stTabs [data-baseweb="tab-list"] { padding: 2px; }
+.stTabs .stTabs [data-baseweb="tab"] { padding: 3px 11px !important; font-size: 11px !important; }
+.stTabs .stTabs [data-baseweb="tab"] p { font-size: 11px !important; }
+
+/* Commodity selector: larger stacked pills */
+[data-testid="stSidebar"] div[role="radiogroup"] { flex-direction: column; align-items: stretch; width: 100%; border-radius: 22px; padding: 5px; gap: 3px; }
+[data-testid="stSidebar"] div[role="radiogroup"] label { padding: 8px 18px !important; }
+[data-testid="stSidebar"] div[role="radiogroup"] label div[data-testid="stMarkdownContainer"] p { font-size: 15px !important; }
 
 /* Certs report table */
 .rwrap { max-height: 78vh; overflow: auto; border: 1px solid #dfe3ee; border-radius: 12px; background: #ffffff; }
