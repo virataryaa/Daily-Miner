@@ -259,18 +259,99 @@ def total_certs_fig(df: pd.DataFrame, grade: str = "VG") -> go.Figure:
     return chart_layout(fig, "Total Certs")
 
 
+def major_ports(view: pd.DataFrame, grade: str = "VG", min_share: float = 0.01) -> list:
+    """Ports whose average share of the total in `view` is at least min_share,
+    biggest first. Near-zero ports are left out of the charts."""
+    tot = view[f"LRC-TOT-{grade}"].astype(float).mean()
+    if not tot:
+        return []
+    share = {p: view[f"LRC-{p}-{grade}"].astype(float).mean() / tot for p in PORT_ORDER}
+    return [p for p in sorted(share, key=lambda p: -(0 if pd.isna(share[p]) else share[p]))
+            if pd.notna(share[p]) and share[p] >= min_share]
+
+
 def ports_certs_fig(df: pd.DataFrame, grade: str = "VG") -> go.Figure:
+    """Line per major port; the bigger the port's share, the bolder the line."""
+    majors = major_ports(df, grade)
+    tot = df[f"LRC-TOT-{grade}"].astype(float).mean()
+    means = {p: df[f"LRC-{p}-{grade}"].astype(float).mean() / tot for p in majors}
+    top = max(means.values()) if means else 1
     fig = go.Figure()
-    for p in PORT_ORDER:
-        c = f"LRC-{p}-{grade}"
-        s = df[["Date", c]].dropna()
-        if s[c].abs().sum() == 0:
-            continue
+    for rank, p in enumerate(majors):
+        s = df[["Date", f"LRC-{p}-{grade}"]].dropna()
+        w = 1.2 + 3.4 * (means[p] / top)
         fig.add_trace(go.Scatter(
-            x=s["Date"], y=s[c], mode="lines", name=p,
-            line=dict(color=PORT_COLORS.get(p, GREY), width=1.8),
+            x=s["Date"], y=s[f"LRC-{p}-{grade}"], mode="lines", name=p, legendrank=rank,
+            line=dict(color=PORT_COLORS.get(p, GREY), width=w),
+            opacity=0.55 + 0.45 * (means[p] / top),
             hovertemplate="%{y:,.0f}<extra>" + p + "</extra>"))
+    fig.data = fig.data[::-1]  # draw the biggest port last, on top
     return chart_layout(fig, "Certs Per Port")
+
+
+def rolling_fig(series: pd.Series, start: pd.Timestamp, end: pd.Timestamp, title: str) -> go.Figure:
+    """Rolling 5- and 20-observation change of a stock series (computed on the
+    full history, then cut to the chosen window)."""
+    ser = series.dropna().astype(float)
+    fig = go.Figure()
+    for n, color, width in [(20, NAVY, 2.6), (5, TEAL, 1.6)]:
+        r = ser.diff(n).dropna()
+        r = r[(r.index >= start) & (r.index <= end)]
+        fig.add_trace(go.Scatter(x=r.index, y=r.values, mode="lines", name=f"{n}d",
+                                 line=dict(color=color, width=width),
+                                 hovertemplate="%{y:+,.0f}<extra>" + f"{n}d" + "</extra>"))
+    fig.add_hline(y=0, line=dict(color="#c5cbdd", width=1))
+    chart_layout(fig, title, height=340)
+    fig.update_layout(yaxis=dict(tickformat="+,"))
+    return fig
+
+
+def share_area_fig(df: pd.DataFrame, grade: str = "VG") -> go.Figure:
+    """100% stacked area of each port's share; minor ports pooled into Other."""
+    majors = major_ports(df, grade)
+    minors = [p for p in PORT_ORDER if p not in majors]
+    fig = go.Figure()
+    for p in reversed(majors):
+        s = df[["Date", f"LRC-{p}-{grade}"]].dropna()
+        fig.add_trace(go.Scatter(x=s["Date"], y=s[f"LRC-{p}-{grade}"], mode="lines", name=p, stackgroup="one",
+                                 groupnorm="percent", line=dict(width=0.6, color=PORT_COLORS.get(p, GREY)),
+                                 fillcolor=PORT_COLORS.get(p, GREY), hovertemplate="%{y:.1f}%<extra>" + p + "</extra>"))
+    if minors:
+        other = df[[f"LRC-{p}-{grade}" for p in minors]].astype(float).sum(axis=1, min_count=1)
+        fig.add_trace(go.Scatter(x=df["Date"], y=other, mode="lines", name="Other", stackgroup="one",
+                                 groupnorm="percent", line=dict(width=0.6, color="#c5cbdd"), fillcolor="#c5cbdd",
+                                 hovertemplate="%{y:.1f}%<extra>Other</extra>"))
+    chart_layout(fig, "Port Share of Total", height=340)
+    fig.update_layout(yaxis=dict(ticksuffix="%", range=[0, 100]))
+    return fig
+
+
+def share_pie_fig(df: pd.DataFrame, grade: str = "VG") -> go.Figure:
+    """Donut of the latest breakup; ports under 1% pooled into Other."""
+    last = df.iloc[-1]
+    tot = float(last[f"LRC-TOT-{grade}"])
+    vals = {p: float(last[f"LRC-{p}-{grade}"]) for p in PORT_ORDER
+            if pd.notna(last[f"LRC-{p}-{grade}"]) and last[f"LRC-{p}-{grade}"] > 0}
+    big = {p: v for p, v in vals.items() if v / tot >= 0.01}
+    rest = sum(v for p, v in vals.items() if p not in big)
+    labels = sorted(big, key=lambda p: -big[p])
+    amounts = [big[p] for p in labels]
+    colors = [PORT_COLORS.get(p, GREY) for p in labels]
+    if rest > 0:
+        labels.append("Other")
+        amounts.append(rest)
+        colors.append("#c5cbdd")
+    fig = go.Figure(go.Pie(
+        labels=labels, values=amounts, hole=0.66, sort=False, direction="clockwise",
+        marker=dict(colors=colors, line=dict(color="#fafafa", width=3)),
+        textinfo="label+percent", textposition="outside", textfont=dict(size=12, color="#1a1a2e"),
+        hovertemplate="%{label}: %{value:,.0f} (%{percent})<extra></extra>", showlegend=False))
+    chart_layout(fig, f"Latest Breakup ({last['Date'].strftime('%d %b %Y')})", height=340)
+    fig.update_layout(
+        margin=dict(t=44, b=20, l=40, r=40),
+        annotations=[dict(text=f"<b>{tot:,.0f}</b><br><span style='font-size:11px;color:#7a86a8'>total</span>",
+                          x=0.5, y=0.5, showarrow=False, font=dict(size=22, color=NAVY))])
+    return fig
 
 
 def seasonality_fig(df: pd.DataFrame, col: str, title: str) -> go.Figure:
@@ -367,7 +448,10 @@ def distribution_fig(values: pd.Series, title: str, label: str) -> go.Figure:
     pct = float((vals <= latest).mean() * 100)
 
     fig = go.Figure()
-    fig.add_trace(go.Histogram(x=vals, histnorm="probability density", nbinsx=90, name="Observed",
+    span = float(vals.max() - vals.min()) or 1.0
+    bin_size = max(1.0, span / 260)  # counts are integers, so 1 bag is the finest useful bin
+    fig.add_trace(go.Histogram(x=vals, histnorm="probability density", name="Observed",
+                               xbins=dict(start=float(vals.min()) - 0.5, end=float(vals.max()) + 0.5, size=bin_size),
                                marker=dict(color=NAVY, opacity=0.78, line=dict(color="#ffffff", width=0.5)),
                                hovertemplate="%{x:,.0f}<extra>Observed</extra>"))
     fig.add_trace(go.Scatter(x=xs, y=pdf, mode="lines", name="Normal fit",
@@ -421,10 +505,26 @@ if commodity == "Coffee":
                     c_start, c_end = c_max - pd.DateOffset(years=int(span[0])), c_max
                 cview = certs[(certs["Date"] >= c_start) & (certs["Date"] <= c_end)]
                 ch1, ch2 = st.columns(2)
+                cfg = {"displayModeBar": False}
                 with ch1:
-                    st.plotly_chart(total_certs_fig(cview), width="stretch", config={"displayModeBar": False})
+                    st.plotly_chart(total_certs_fig(cview), width="stretch", config=cfg)
                 with ch2:
-                    st.plotly_chart(ports_certs_fig(cview), width="stretch", config={"displayModeBar": False})
+                    st.plotly_chart(ports_certs_fig(cview), width="stretch", config=cfg)
+                r1, r2 = st.columns(2)
+                port_opts = [k for k in seasonality_options(certs) if k != "Total"]
+                with r1:
+                    st.markdown("<div style='height:40px'></div>", unsafe_allow_html=True)
+                    st.plotly_chart(rolling_fig(certs.set_index("Date")["LRC-TOT-VG"], c_start, c_end,
+                                                "Rolling Change: Total (20d / 5d)"), width="stretch", config=cfg)
+                with r2:
+                    roll_port = st.selectbox("Rolling port", port_opts, key="rc_roll_port", label_visibility="collapsed")
+                    st.plotly_chart(rolling_fig(certs.set_index("Date")[f"LRC-{roll_port}-VG"], c_start, c_end,
+                                                f"Rolling Change: {roll_port} (20d / 5d)"), width="stretch", config=cfg)
+                sh1, sh2 = st.columns(2)
+                with sh1:
+                    st.plotly_chart(share_area_fig(cview), width="stretch", config=cfg)
+                with sh2:
+                    st.plotly_chart(share_pie_fig(certs), width="stretch", config=cfg)
             with tab_season:
                 opts = seasonality_options(certs)
                 s_left, s_right = st.columns([2, 3])
@@ -438,7 +538,7 @@ if commodity == "Coffee":
                 lvl = certs.set_index("Date")[opts[view_pick]].dropna()
                 lvl = lvl[lvl.index >= DIST_START]
                 st.markdown("<div style='height:36px'></div>", unsafe_allow_html=True)
-                d1, _ = st.columns([1, 2])
+                _l, d1, _r = st.columns([1, 2, 1])
                 with d1:
                     st.plotly_chart(distribution_fig(lvl.diff().dropna(), f"Daily Change Distribution: {view_pick}", "chg"),
                                     width="stretch", config={"displayModeBar": False})
