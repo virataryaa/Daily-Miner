@@ -279,19 +279,22 @@ def major_ports(view: pd.DataFrame, grade: str = "VG", min_share: float = 0.01) 
 
 
 def ports_certs_fig(df: pd.DataFrame, grade: str = "VG") -> go.Figure:
-    """Stacked area of certs per major port (biggest at the bottom); minor ports pooled into Other."""
-    majors = major_ports(df, grade)
+    """Stacked area of certs per major port (biggest at the bottom); minor ports pooled into Other.
+    2012-14 has total-only rows (all ports blank), which would collapse the stack, so only rows
+    that carry port data are used here; the Total chart keeps every row."""
+    port_cols = [f"LRC-{p}-{grade}" for p in PORT_ORDER]
+    pv = df[df[port_cols].notna().any(axis=1)]
+    majors = major_ports(pv, grade)
     minors = [p for p in PORT_ORDER if p not in majors]
     fig = go.Figure()
     for p in majors:
-        s = df[["Date", f"LRC-{p}-{grade}"]].dropna()
         fig.add_trace(go.Scatter(
-            x=s["Date"], y=s[f"LRC-{p}-{grade}"], mode="lines", name=p, stackgroup="one",
+            x=pv["Date"], y=pv[f"LRC-{p}-{grade}"].astype(float).fillna(0), mode="lines", name=p, stackgroup="one",
             line=dict(width=0.6, color=PORT_COLORS.get(p, GREY)), fillcolor=PORT_COLORS.get(p, GREY),
             hovertemplate="%{y:,.0f}<extra>" + p + "</extra>"))
     if minors:
-        other = df[[f"LRC-{p}-{grade}" for p in minors]].astype(float).sum(axis=1, min_count=1)
-        fig.add_trace(go.Scatter(x=df["Date"], y=other, mode="lines", name="Other", stackgroup="one",
+        other = pv[[f"LRC-{p}-{grade}" for p in minors]].astype(float).fillna(0).sum(axis=1)
+        fig.add_trace(go.Scatter(x=pv["Date"], y=other, mode="lines", name="Other", stackgroup="one",
                                  line=dict(width=0.6, color="#c5cbdd"), fillcolor="#c5cbdd",
                                  hovertemplate="%{y:,.0f}<extra>Other</extra>"))
     return chart_layout(fig, "Certs Per Port")
