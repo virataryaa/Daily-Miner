@@ -346,31 +346,52 @@ def share_line_fig(df: pd.DataFrame, grade: str = "VG") -> go.Figure:
     return fig
 
 
+def tint(hex_color: str, keep: float = 0.55) -> str:
+    """Blend a hex colour towards white; keep = share of the original colour."""
+    h = hex_color.lstrip("#")
+    r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+    mix = lambda c: int(round(c * keep + 255 * (1 - keep)))
+    return f"#{mix(r):02x}{mix(g):02x}{mix(b):02x}"
+
+
 def share_pie_fig(df: pd.DataFrame, grade: str = "VG") -> go.Figure:
-    """Donut of the latest breakup; ports under 1% pooled into Other."""
+    """Latest breakup as a two-ring donut: inner ring = country, outer ring = port.
+    Ports under 1% of the total are pooled into a grey Other."""
     last = df.iloc[-1]
     tot = float(last[f"LRC-TOT-{grade}"])
-    vals = {p: float(last[f"LRC-{p}-{grade}"]) for p in PORT_ORDER
-            if pd.notna(last[f"LRC-{p}-{grade}"]) and last[f"LRC-{p}-{grade}"] > 0}
-    big = {p: v for p, v in vals.items() if v / tot >= 0.01}
-    rest = sum(v for p, v in vals.items() if p not in big)
-    labels = sorted(big, key=lambda p: -big[p])
-    amounts = [big[p] for p in labels]
-    colors = [PORT_COLORS.get(p, GREY) for p in labels]
-    if rest > 0:
-        labels.append("Other")
-        amounts.append(rest)
-        colors.append("#c5cbdd")
-    fig = go.Figure(go.Pie(
-        labels=labels, values=amounts, hole=0.66, sort=False, direction="clockwise",
-        marker=dict(colors=colors, line=dict(color="#fafafa", width=3)),
-        textinfo="label+percent", textposition="outside", textfont=dict(size=12, color="#1a1a2e"),
-        hovertemplate="%{label}: %{value:,.0f} (%{percent})<extra></extra>", showlegend=False))
+
+    def stock(p):
+        v = last[f"LRC-{p}-{grade}"]
+        return 0.0 if pd.isna(v) else float(v)
+
+    ids, labels, parents, values, colors, texts = ["root"], [f"{tot:,.0f}"], [""], [tot], ["#fafafa"],         [f"<b>{tot:,.0f}</b><br>total"]
+    used = 0.0
+    for country, ports in countries_by_stock(df, grade):
+        big = [p for p in ports if stock(p) / tot >= 0.01]
+        c_val = sum(stock(p) for p in big)
+        if not big:
+            continue
+        base = PORT_COLORS.get(big[0], GREY)
+        ids.append(f"c:{country}"); labels.append(country); parents.append("root"); values.append(c_val)
+        colors.append(tint(base, 0.5)); texts.append(country if c_val / tot >= 0.04 else "")
+        for p in big:
+            ids.append(f"p:{p}"); labels.append(p); parents.append(f"c:{country}"); values.append(stock(p))
+            colors.append(PORT_COLORS.get(p, GREY))
+            texts.append(f"{p}<br>{stock(p) / tot * 100:.0f}%" if stock(p) / tot >= 0.04 else "")
+        used += c_val
+    rest = tot - used
+    if rest > 0.5:
+        ids += ["c:Other", "p:Other"]; labels += ["Other", "Other"]; parents += ["root", "c:Other"]
+        values += [rest, rest]; colors += ["#dfe3ee", "#c5cbdd"]; texts += ["", ""]
+    fig = go.Figure(go.Sunburst(
+        ids=ids, labels=labels, parents=parents, values=values, branchvalues="total", sort=False,
+        marker=dict(colors=colors, line=dict(color="#fafafa", width=2.5)),
+        text=texts, textinfo="text", insidetextorientation="horizontal",
+        textfont=dict(size=11, color="#1a1a2e"),
+        hovertemplate="%{label}: %{value:,.0f} (%{percentRoot:.1%})<extra></extra>",
+        domain=dict(x=[0.2, 0.8], y=[0.04, 0.96])))
     chart_layout(fig, f"Latest Breakup ({last['Date'].strftime('%d %b %Y')})", height=360)
-    fig.update_layout(
-        margin=dict(t=44, b=20, l=40, r=40),
-        annotations=[dict(text=f"<b>{tot:,.0f}</b><br><span style='font-size:11px;color:#7a86a8'>total</span>",
-                          x=0.5, y=0.5, showarrow=False, font=dict(size=22, color=NAVY))])
+    fig.update_layout(margin=dict(t=44, b=8, l=8, r=8), showlegend=False)
     return fig
 
 
