@@ -318,7 +318,7 @@ if commodity == "Coffee":
             certs = load_rc_certs()
             end = certs["Date"].max()
             start = end - pd.DateOffset(years=HISTORY_YEARS)
-            tab_data, tab_visuals = st.tabs(["Data Table", "Visuals"])
+            tab_data, tab_visuals, tab_season = st.tabs(["Data Table", "Visuals", "Seasonality"])
             with tab_data:
                 st.markdown(certs_report_html(certs, start, end), unsafe_allow_html=True)
             with tab_visuals:
@@ -344,9 +344,8 @@ if commodity == "Coffee":
                     st.plotly_chart(total_certs_fig(cview), width="stretch", config={"displayModeBar": False})
                 with ch2:
                     st.plotly_chart(ports_certs_fig(cview), width="stretch", config={"displayModeBar": False})
-                s1, _ = st.columns(2)
-                with s1:
-                    opts = seasonality_options(certs)
-                    view_pick = st.selectbox("Seasonality", list(opts), key="rc_season_view")
-                    st.plotly_chart(seasonality_fig(certs, opts[view_pick], f"Seasonality: {view_pick}"),
-                                    width="stretch", config={"displayModeBar": False})
+            with tab_season:
+                opts = seasonality_options(certs)
+                view_pick = st.selectbox("Seasonality", list(opts), key="rc_season_view")
+                st.plotly_chart(seasonality_fig(certs, opts[view_pick], f"Seasonality: {view_pick}"),
+                                width="stretch", config={"displayModeBar": False})
