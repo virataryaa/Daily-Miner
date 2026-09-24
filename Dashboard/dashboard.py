@@ -129,6 +129,7 @@ def fmt_int(v):
     return "-" if pd.isna(v) else f"{int(v):,}"
 
 
+HISTORY_YEARS = 2
 PORT_ORDER = ["AMS", "ANT", "BAR", "BRE", "FEL", "GEN", "HAM", "LIV", "LON", "NOR", "ROT", "TRI"]
 
 
@@ -191,5 +192,6 @@ if commodity == "Coffee":
         sub_certs, sub_grading, sub_both = st.tabs(["Certs", "Grading", "Certs & Grading"])
         with sub_certs:
             certs = load_rc_certs()
-            start, end = certs["Date"].min(), certs["Date"].max()
+            end = certs["Date"].max()
+            start = end - pd.DateOffset(years=HISTORY_YEARS)
             st.markdown(certs_report_html(certs, start, end), unsafe_allow_html=True)
