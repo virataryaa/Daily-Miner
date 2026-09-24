@@ -89,18 +89,17 @@ div[role="radiogroup"] label:has(input:checked) div[data-testid="stMarkdownConta
 [data-testid="stSidebar"] div[role="radiogroup"] label div[data-testid="stMarkdownContainer"] p { font-size: 15px !important; }
 
 /* Certs report table */
-.rwrap { max-height: 78vh; overflow: auto; border: 1px solid #dfe3ee; border-radius: 12px; background: #ffffff; }
-.rpt { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 11px; line-height: 1.25; font-variant-numeric: tabular-nums; }
-.rpt thead th { position: sticky; top: 0; z-index: 2; background: #0a2463; color: #ffffff; font-weight: 600; padding: 4px 6px; font-size: 10.5px; text-align: right; white-space: nowrap; }
-.rpt thead th small { display: block; font-weight: 500; font-size: 9px; color: #9fb0e0; margin-top: 1px; }
-.rpt thead th.l { text-align: left; }
-.rpt thead th.sec { background: #14357f; text-align: center; letter-spacing: .04em; }
-.rpt thead th.gap { background: #fafafa; padding: 0; width: 8px; min-width: 8px; }
-.rpt td { padding: 2px 6px; text-align: right; border-bottom: 1px solid #eef0f6; color: #1a1a2e; white-space: nowrap; }
-.rpt td.d { text-align: left; color: #5a6688; font-weight: 500; }
+.rwrap { max-height: 78vh; overflow: auto; border: 1px solid #dfe3ee; border-radius: 12px; background: #ffffff; width: fit-content; max-width: 100%; }
+.rpt { width: max-content; border-collapse: separate; border-spacing: 0; font-size: 11px; line-height: 1.25; font-variant-numeric: tabular-nums; }
+.rpt thead th { position: sticky; z-index: 2; background: #0a2463; color: #ffffff; font-weight: 600; padding: 4px 9px; font-size: 10.5px; text-align: center; white-space: nowrap; }
+.rpt thead tr.h1 th { top: 0; height: 24px; background: #14357f; letter-spacing: .05em; font-size: 11px; }
+.rpt thead tr.h2 th { top: 24px; }
+.rpt thead th.dt { top: 0; z-index: 3; }
+.rpt .sep { border-left: 2px solid #0a2463; }
+.rpt td { padding: 2px 9px; text-align: center; border-bottom: 1px solid #eef0f6; color: #1a1a2e; white-space: nowrap; }
+.rpt td.d { color: #5a6688; font-weight: 500; }
 .rpt td.tot { font-weight: 700; color: #0a2463; background: #f0f2f8; }
-.rpt td.gap { padding: 0; background: #fafafa; border-bottom: none; }
-.rpt td.cb { position: relative; font-weight: 700; min-width: 74px; text-align: center; background: #f6f7fb; }
+.rpt td.cb { position: relative; font-weight: 700; min-width: 74px; background: #f6f7fb; }
 .rpt td.cb i { position: absolute; top: 2px; bottom: 2px; border-radius: 2px; opacity: .35; }
 .rpt td.cb i.up { left: 50%; background: #1f9d6f; }
 .rpt td.cb i.dn { right: 50%; background: #c94a4a; }
@@ -131,20 +130,20 @@ def fmt_int(v):
 
 
 PORT_ORDER = ["AMS", "ANT", "BAR", "BRE", "FEL", "GEN", "HAM", "LIV", "LON", "NOR", "ROT", "TRI"]
-N_ROWS = 250
 
 
-def certs_report_html(df: pd.DataFrame, grade: str = "VG", n_rows: int = N_ROWS) -> str:
-    """Dates down the rows: stocks by port on the left, day-over-day change
-    by port on the right (total change carries in-cell bars)."""
+def certs_report_html(df: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp, grade: str = "VG") -> str:
+    """One table, dates down the rows: 'Certs Per Ports' block on the left,
+    'Daily Change Per Port' block on the right (total change carries bars)."""
     cols = [f"LRC-{p}-{grade}" for p in PORT_ORDER]
     tot = f"LRC-TOT-{grade}"
     lv = df[["Date", tot] + cols].copy()
     chg = lv[[tot] + cols].fillna(0).diff()
-    view = pd.concat([lv["Date"], lv[[tot] + cols], chg.add_suffix("_c")], axis=1).iloc[1:].tail(n_rows)
-    view = view.iloc[::-1]
+    view = pd.concat([lv["Date"], lv[[tot] + cols], chg.add_suffix("_c")], axis=1).iloc[1:]
+    view = view[(view["Date"] >= start) & (view["Date"] <= end)].iloc[::-1]
+    if view.empty:
+        return "<div class='rwrap' style='padding:14px'>No data in the selected range.</div>"
     scale = max(view[f"{tot}_c"].abs().max(), 1)
-    latest = lv.iloc[-1]
 
     def num(v):
         return "" if pd.isna(v) or v == 0 else f"{int(v):,}"
@@ -154,27 +153,27 @@ def certs_report_html(df: pd.DataFrame, grade: str = "VG", n_rows: int = N_ROWS)
             return ""
         return f"<span class='{'pos' if v > 0 else 'neg'}'>{int(v):+,}</span>"
 
-    head = ["<div class='rwrap'><table class='rpt'><thead><tr>",
-            "<th class='l'>Date</th><th>TOT</th>"]
-    for p, c in zip(PORT_ORDER, cols):
-        share = latest[c] / latest[tot] * 100 if latest[tot] and pd.notna(latest[c]) else 0
-        head.append(f"<th>{p}<small>{share:.0f}%</small></th>")
-    head.append("<th class='gap'></th><th class='l'>Date</th><th>TOT chg</th>")
+    n = len(PORT_ORDER)
+    head = ["<div class='rwrap'><table class='rpt'><thead>",
+            "<tr class='h1'><th class='dt' rowspan='2'>Date</th>",
+            f"<th colspan='{n + 1}'>Certs Per Ports</th>",
+            f"<th colspan='{n + 1}' class='sep'>Daily Change Per Port</th></tr>",
+            "<tr class='h2'><th>TOT</th>"]
+    head += [f"<th>{p}</th>" for p in PORT_ORDER]
+    head.append("<th class='sep'>TOT</th>")
     head += [f"<th>{p}</th>" for p in PORT_ORDER]
     head.append("</tr></thead><tbody>")
 
     body = []
     for _, r in view.iterrows():
-        d = r["Date"].strftime("%d-%b-%y")
         t = r[f"{tot}_c"]
         bar = ""
         if t:
             w = abs(t) / scale * 50
             bar = f"<i class='{'up' if t > 0 else 'dn'}' style='width:{w:.1f}%'></i>"
-        row = [f"<tr><td class='d'>{d}</td><td class='tot'>{num(r[tot])}</td>"]
+        row = [f"<tr><td class='d'>{r['Date'].strftime('%d-%b-%y')}</td><td class='tot'>{num(r[tot])}</td>"]
         row += [f"<td>{num(r[c])}</td>" for c in cols]
-        row.append("<td class='gap'></td>")
-        row.append(f"<td class='d'>{d}</td><td class='cb'>{bar}<span>{sgn(t)}</span></td>")
+        row.append(f"<td class='cb sep'>{bar}<span>{sgn(t)}</span></td>")
         row += [f"<td>{sgn(r[c + '_c'])}</td>" for c in cols]
         row.append("</tr>")
         body.append("".join(row))
@@ -191,4 +190,19 @@ if commodity == "Coffee":
     with tab_robusta:
         sub_certs, sub_grading, sub_both = st.tabs(["Certs", "Grading", "Certs & Grading"])
         with sub_certs:
-            st.markdown(certs_report_html(load_rc_certs()), unsafe_allow_html=True)
+            certs = load_rc_certs()
+            d_min, d_max = certs["Date"].min().date(), certs["Date"].max().date()
+            rng = st.radio("Range", ["Last 3M", "Last 6M", "Last 1Y", "Custom"], horizontal=True,
+                           label_visibility="collapsed", key="rc_certs_range")
+            months = {"Last 3M": 3, "Last 6M": 6, "Last 1Y": 12}
+            if rng == "Custom":
+                picked = st.date_input("Custom range", value=(d_max - pd.DateOffset(months=3), d_max),
+                                       min_value=d_min, max_value=d_max, key="rc_certs_custom")
+                if isinstance(picked, (tuple, list)) and len(picked) == 2:
+                    start, end = pd.Timestamp(picked[0]), pd.Timestamp(picked[1])
+                else:
+                    start, end = pd.Timestamp(d_max) - pd.DateOffset(months=3), pd.Timestamp(d_max)
+            else:
+                end = pd.Timestamp(d_max)
+                start = end - pd.DateOffset(months=months[rng])
+            st.markdown(certs_report_html(certs, start, end), unsafe_allow_html=True)
