@@ -438,10 +438,7 @@ if commodity == "Coffee":
                 lvl = certs.set_index("Date")[opts[view_pick]].dropna()
                 lvl = lvl[lvl.index >= DIST_START]
                 st.markdown("<div style='height:36px'></div>", unsafe_allow_html=True)
-                d1, d2, _ = st.columns(3)
+                d1, _ = st.columns([1, 2])
                 with d1:
-                    st.plotly_chart(distribution_fig(lvl, f"Stock Level Distribution: {view_pick}", "lvl"),
-                                    width="stretch", config={"displayModeBar": False})
-                with d2:
                     st.plotly_chart(distribution_fig(lvl.diff().dropna(), f"Daily Change Distribution: {view_pick}", "chg"),
                                     width="stretch", config={"displayModeBar": False})
