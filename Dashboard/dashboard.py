@@ -548,6 +548,7 @@ def distribution_fig(values: pd.Series, title: str, label: str) -> go.Figure:
 
 # ------------------------------------------------------------------ grading
 GRADING_ORIGIN_MAIN = {"Brazilian Conillon": "Brazil", "Vietnam": "Vietnam", "Indonesia": "Indonesia"}
+GRADING_ORIGIN_SHORT = {"Brazilian Conillon": "Brazil", "Republic of Madagascar": "Madagascar"}
 GRADING_CLASS_ORDER = ["1", "2", "3", "4", "P", "NA"]
 GRADING_CLASS_LABEL = {"NA": "NT"}
 GRADING_CLASS_COLORS = {"1": NAVY, "2": TEAL, "3": AMBER, "4": RED, "P": GREEN, "NA": GREY}
@@ -562,8 +563,24 @@ def load_rc_grading() -> pd.DataFrame:
     g = pd.read_parquet(DB_DIR / "rc_grading.parquet")
     g["PanelDate"] = pd.to_datetime(g["PanelDate"])
     g["Origin2"] = g["Origin"].map(GRADING_ORIGIN_MAIN).fillna("Other")
+    g["OriginName"] = g["Origin"].map(GRADING_ORIGIN_SHORT).fillna(g["Origin"])
     g["Country"] = g["PortId"].map(PORT_COUNTRY).fillna("Other")
     return g
+
+
+def grading_origin_palette(g: pd.DataFrame) -> tuple:
+    """(origins biggest-first, colours). The top three keep the strong app colours; every smaller
+    origin gets a lighter tint that fades with rank."""
+    order = list(g.groupby("OriginName")["NoLots"].sum().sort_values(ascending=False).index)
+    strong = [NAVY, TEAL, AMBER]
+    soft = ["#9b6bb3", RED, GREEN, "#6b7fb5", "#c0722c", "#4a5578", "#8fa3d1", "#b58f4a", GREY, "#c5cbdd"]
+    colors = {}
+    for i, o in enumerate(order):
+        if i < len(strong):
+            colors[o] = strong[i]
+        else:
+            colors[o] = tint(soft[(i - 3) % len(soft)], max(0.75 - 0.06 * (i - 3), 0.32))
+    return order, colors
 
 
 def grading_table_html(g: pd.DataFrame, height: str = "60vh") -> str:
@@ -625,21 +642,39 @@ def grading_table_html(g: pd.DataFrame, height: str = "60vh") -> str:
 
 
 def grading_bar_fig(view: pd.DataFrame, col: str, title: str, order: list, colors: dict,
-                    labels: dict | None = None, height: int = 340) -> go.Figure:
-    """Lots graded per panel date, stacked by `col` (category axis: only panel dates are shown)."""
+                    labels: dict | None = None, height: int = 340, hi: set | None = None) -> go.Figure:
+    """Lots graded per panel date, stacked by `col` (category axis: only panel dates are shown).
+    hi = origins picked in the Per Origin chart: every bar is split into the picked origins
+    (full colour) and the rest (faded), so their share in this chart stands out."""
     fig = go.Figure()
     if view.empty:
         return chart_layout(fig, title, height)
-    piv = view.groupby(["PanelDate", col])["NoLots"].sum().unstack(fill_value=0).sort_index()
-    xs = piv.index.strftime("%d/%m/%y")
+    dates = sorted(view["PanelDate"].unique())
+    xs = pd.DatetimeIndex(dates).strftime("%d/%m/%y")
+
+    def series(df, key):
+        v = df[df[col] == key].groupby("PanelDate")["NoLots"].sum()
+        return v.reindex(dates, fill_value=0).values
+
     for key in order:
-        if key in piv.columns and piv[key].sum() > 0:
-            name = (labels or {}).get(key, key)
-            fig.add_trace(go.Bar(x=xs, y=piv[key], name=name, marker_color=colors.get(key, GREY),
-                                 hovertemplate="%{y:,.0f}<extra>" + name + "</extra>"))
-    total = piv.sum(axis=1)
-    if len(piv) <= 70:
-        fig.add_trace(go.Scatter(x=xs, y=total, mode="text", text=[f"{int(v):,}" for v in total],
+        if not (view[col] == key).any():
+            continue
+        name = (labels or {}).get(key, key)
+        if hi:
+            sel = view[view["OriginName"].isin(hi)]
+            oth = view[~view["OriginName"].isin(hi)]
+            fig.add_trace(go.Bar(x=xs, y=series(sel, key), name=name, legendgroup=name,
+                                 marker_color=colors.get(key, GREY),
+                                 hovertemplate="%{y:,.0f}<extra>" + name + " (picked)</extra>"))
+            fig.add_trace(go.Bar(x=xs, y=series(oth, key), name=name, legendgroup=name, showlegend=False,
+                                 marker=dict(color=colors.get(key, GREY), opacity=0.2),
+                                 hovertemplate="%{y:,.0f}<extra>" + name + " (other)</extra>"))
+        else:
+            fig.add_trace(go.Bar(x=xs, y=series(view, key), name=name, marker_color=colors.get(key, GREY),
+                                 customdata=[key] * len(xs), hovertemplate="%{y:,.0f}<extra>" + name + "</extra>"))
+    total = view.groupby("PanelDate")["NoLots"].sum().reindex(dates, fill_value=0)
+    if len(dates) <= 70:
+        fig.add_trace(go.Scatter(x=xs, y=total.values, mode="text", text=[f"{int(v):,}" for v in total.values],
                                  textposition="top center", textfont=dict(size=10, color=NAVY),
                                  showlegend=False, hoverinfo="skip"))
     chart_layout(fig, title, height)
@@ -650,6 +685,24 @@ def grading_bar_fig(view: pd.DataFrame, col: str, title: str, order: list, color
         legend=dict(orientation="v", x=1.01, y=1, xanchor="left", yanchor="top"),
         margin=dict(t=44, b=8, l=8, r=8))
     return fig
+
+
+def picked_origins(event, names: list) -> set:
+    """Origins behind the bar segments clicked in the Per Origin chart."""
+    picked = set()
+    try:
+        points = event.selection.points
+    except Exception:
+        return picked
+    for pt in points or []:
+        cd = pt.get("customdata")
+        if isinstance(cd, (list, tuple)):
+            cd = cd[0] if cd else None
+        if isinstance(cd, str):
+            picked.add(cd)
+        elif pt.get("curve_number") is not None and pt["curve_number"] < len(names):
+            picked.add(names[pt["curve_number"]])
+    return picked
 
 
 def grading_cumulative(g: pd.DataFrame) -> pd.DataFrame:
@@ -815,36 +868,35 @@ if commodity == "Coffee":
                     gs_, ge_ = g_min, g_max
                 else:
                     gs_, ge_ = g_max - pd.DateOffset(months={"3M": 3, "6M": 6, "1Y": 12}[g_span]), g_max
-                f1, f2, _ = st.columns([2, 2, 3])
-                cls_opts = [GRADING_CLASS_LABEL.get(c, c) for c in GRADING_CLASS_ORDER]
-                with f1:
-                    cls_pick = st.multiselect("Class", cls_opts, default=cls_opts, key="rg_class",
-                                              placeholder="Class")
-                with f2:
-                    org_opts = [o for o in GRADING_ORIGIN_COLORS if o in set(gr["Origin2"])]
-                    org_pick = st.multiselect("Origin", org_opts, default=org_opts, key="rg_origin",
-                                              placeholder="Origin")
-                inv = {v: k for k, v in GRADING_CLASS_LABEL.items()}
-                gview = gr[(gr["PanelDate"] >= gs_) & (gr["PanelDate"] <= ge_)
-                           & gr["Class"].isin([inv.get(c, c) for c in cls_pick]) & gr["Origin2"].isin(org_pick)]
-                st.plotly_chart(grading_bar_fig(gview, "Origin2", "Daily Gradings in Lots | Per Origin",
-                                                list(GRADING_ORIGIN_COLORS), GRADING_ORIGIN_COLORS),
-                                width="stretch", config=gcfg)
+                gview = gr[(gr["PanelDate"] >= gs_) & (gr["PanelDate"] <= ge_)]
+                o_order, o_colors = grading_origin_palette(gr)
+                names_present = [k for k in o_order if (gview["OriginName"] == k).any()]
+                ver = st.session_state.get("rg_sel_ver", 0)
+                if st.session_state.get("rg_hi_active"):
+                    if st.button("Clear highlight", key="rg_clear"):
+                        st.session_state["rg_sel_ver"] = ver = ver + 1
+                        st.session_state["rg_hi_active"] = False
+                ev = st.plotly_chart(grading_bar_fig(gview, "OriginName", "Daily Gradings in Lots | Per Origin",
+                                                     o_order, o_colors),
+                                     width="stretch", config=gcfg, key=f"rg_origin_chart_{ver}",
+                                     on_select="rerun", selection_mode="points")
+                hi = picked_origins(ev, names_present)
+                st.session_state["rg_hi_active"] = bool(hi)
                 st.plotly_chart(grading_bar_fig(gview, "Class", "Daily Gradings in Lots | Per Class",
-                                                GRADING_CLASS_ORDER, GRADING_CLASS_COLORS, GRADING_CLASS_LABEL),
+                                                GRADING_CLASS_ORDER, GRADING_CLASS_COLORS, GRADING_CLASS_LABEL, hi=hi),
                                 width="stretch", config=gcfg)
                 port_order = list(gr.groupby("PortId")["NoLots"].sum().sort_values(ascending=False).index)
                 st.plotly_chart(grading_bar_fig(gview, "PortId", "Daily Gradings in Lots | Per Port",
-                                                port_order, PORT_COLORS),
+                                                port_order, PORT_COLORS, hi=hi),
                                 width="stretch", config=gcfg)
 
             with g_season:
-                g_opts = ["Total"] + list(gr.groupby("Origin2")["NoLots"].sum().sort_values(ascending=False).index)
+                g_opts = ["Total"] + list(gr.groupby("OriginName")["NoLots"].sum().sort_values(ascending=False).index)
                 gs_left, gs_right = st.columns([2, 3])
                 g_pick = None
                 with gs_left:
                     g_pick = st.selectbox("Origin", g_opts, key="rg_season_view")
-                sel = gr if g_pick == "Total" else gr[gr["Origin2"] == g_pick]
+                sel = gr if g_pick == "Total" else gr[gr["OriginName"] == g_pick]
                 with gs_left:
                     st.plotly_chart(seasonality_fig(grading_cumulative(sel), "lots",
                                                     f"Cumulative Lots Graded (YTD): {g_pick}"),
