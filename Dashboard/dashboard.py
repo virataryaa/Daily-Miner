@@ -498,30 +498,40 @@ DIST_START = "2015-01-01"  # daily-observation era; earlier data is roughly biwe
 
 
 def distribution_fig(values: pd.Series, title: str, label: str) -> go.Figure:
-    """Histogram (density) with a fitted normal curve and the latest value marked."""
+    """Histogram of non-zero daily changes (zero-change days are counted but not drawn, they only
+    make one giant spike) over the 1st-99th percentile, with a fitted normal curve and the latest
+    value marked."""
     vals = values.dropna().astype(float)
     latest = float(vals.iloc[-1])
-    mu, sd = float(vals.mean()), float(vals.std(ddof=0)) or 1.0
-    xs = np.linspace(vals.min(), vals.max(), 240)
-    pdf = np.exp(-0.5 * ((xs - mu) / sd) ** 2) / (sd * np.sqrt(2 * np.pi))
+    nz = vals[vals != 0]
+    if len(nz) < 20:
+        nz = vals
+    n_zero = int((vals == 0).sum())
+    lo, hi = float(nz.quantile(0.01)), float(nz.quantile(0.99))
+    lo, hi = min(lo, latest, -1.0), max(hi, latest, 1.0)
+    shown = nz[(nz >= lo) & (nz <= hi)]
+    mu, sd = float(nz.mean()), float(nz.std(ddof=0)) or 1.0
     z = (latest - mu) / sd
-    pct = float((vals <= latest).mean() * 100)
+    pct = float((nz <= latest).mean() * 100)
+    bin_size = max(1.0, float(np.ceil((hi - lo) / 45)))
+    xs = np.linspace(lo, hi, 300)
+    pdf = np.exp(-0.5 * ((xs - mu) / sd) ** 2) / (sd * np.sqrt(2 * np.pi))
 
     fig = go.Figure()
-    span = float(vals.max() - vals.min()) or 1.0
-    bin_size = max(1.0, span / 260)  # counts are integers, so 1 bag is the finest useful bin
-    fig.add_trace(go.Histogram(x=vals, histnorm="probability density", name="Observed",
-                               xbins=dict(start=float(vals.min()) - 0.5, end=float(vals.max()) + 0.5, size=bin_size),
-                               marker=dict(color=NAVY, opacity=0.78, line=dict(color="#ffffff", width=0.5)),
+    fig.add_trace(go.Histogram(x=shown, histnorm="probability density", name="Observed",
+                               xbins=dict(start=lo - bin_size / 2, end=hi + bin_size / 2, size=bin_size),
+                               marker=dict(color=NAVY, opacity=0.85, line=dict(color="#fafafa", width=1)),
                                hovertemplate="%{x:,.0f}<extra>Observed</extra>"))
     fig.add_trace(go.Scatter(x=xs, y=pdf, mode="lines", name="Normal fit",
                              line=dict(color=TEAL, width=2.4), hoverinfo="skip"))
     fig.add_vline(x=latest, line=dict(color=AMBER, width=2, dash="dash"))
     chart_layout(fig, title, height=540)
+    zero_note = f"zero-change days not drawn: {n_zero:,} ({n_zero / len(vals) * 100:.0f}%)  |  1st-99th percentile shown"
     fig.update_layout(
         showlegend=False, hovermode="closest", margin=dict(t=40, b=8, l=8, r=8),
         yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
-        xaxis=dict(tickformat=",", gridcolor="rgba(10,36,99,0.06)", showline=True, linecolor="#dfe3ee"),
+        xaxis=dict(title=dict(text=zero_note, font=dict(size=11, color="#7a86a8")), range=[lo - bin_size, hi + bin_size],
+                   tickformat=",", gridcolor="rgba(10,36,99,0.06)", showline=True, linecolor="#dfe3ee"),
         annotations=[dict(xref="paper", yref="paper", x=1, y=1.02, xanchor="right", yanchor="bottom", showarrow=False,
                           text=f"Latest {latest:+,.0f}  |  z {z:+.1f}  |  pctile {pct:.0f}" if label == "chg"
                           else f"Latest {latest:,.0f}  |  z {z:+.1f}  |  pctile {pct:.0f}",
