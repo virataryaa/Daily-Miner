@@ -134,14 +134,29 @@ HISTORY_YEARS = 2
 PORT_ORDER = ["AMS", "ANT", "BAR", "BRE", "FEL", "GEN", "HAM", "LIV", "LON", "NOR", "ROT", "TRI"]
 
 
-def certs_report_html(df: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp, grade: str = "VG") -> str:
-    """One table, dates down the rows: 'Certs Per Ports' block on the left,
-    'Daily Change Per Port' block on the right (total change carries bars)."""
-    cols = [f"LRC-{p}-{grade}" for p in PORT_ORDER]
+COUNTRY_PORTS = {
+    "Belgium": ["ANT"],
+    "UK": ["LON", "FEL", "LIV"],
+    "Netherlands": ["AMS", "ROT"],
+    "Germany": ["HAM", "BRE"],
+    "Spain": ["BAR"],
+    "Italy": ["GEN", "TRI"],
+    "Other": ["NOR"],
+}
+
+
+def certs_report_html(df: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp, groups: dict,
+                      left_title: str, right_title: str, grade: str = "VG", height: str = "60vh") -> str:
+    """One table, dates down the rows: stocks per group on the left, day-over-day
+    change per group on the right (total change carries bars). `groups` maps a
+    column label to the ports summed into it."""
     tot = f"LRC-TOT-{grade}"
-    lv = df[["Date", tot] + cols].copy()
-    chg = lv[[tot] + cols].fillna(0).diff()
-    view = pd.concat([lv["Date"], lv[[tot] + cols], chg.add_suffix("_c")], axis=1).iloc[1:]
+    lv = df[["Date", tot]].copy()
+    for label, ports in groups.items():
+        lv[label] = df[[f"LRC-{p}-{grade}" for p in ports]].sum(axis=1, min_count=1)
+    labels = list(groups)
+    chg = lv[[tot] + labels].fillna(0).diff()
+    view = pd.concat([lv["Date"], lv[[tot] + labels], chg.add_suffix("_c")], axis=1).iloc[1:]
     view = view[(view["Date"] >= start) & (view["Date"] <= end)].iloc[::-1]
     if view.empty:
         return "<div class='rwrap' style='padding:14px'>No data in the selected range.</div>"
@@ -155,15 +170,15 @@ def certs_report_html(df: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp, 
             return ""
         return f"<span class='{'pos' if v > 0 else 'neg'}'>{int(v):+,}</span>"
 
-    n = len(PORT_ORDER)
-    head = ["<div class='rwrap'><table class='rpt'><thead>",
+    n = len(labels)
+    head = [f"<div class='rwrap' style='height:{height}'><table class='rpt'><thead>",
             "<tr class='h1'><th class='dt' rowspan='2'>Date</th>",
-            f"<th colspan='{n + 1}'>Certs Per Ports</th>",
-            f"<th colspan='{n + 1}' class='sep'>Daily Change Per Port</th></tr>",
+            f"<th colspan='{n + 1}'>{left_title}</th>",
+            f"<th colspan='{n + 1}' class='sep'>{right_title}</th></tr>",
             "<tr class='h2'><th>TOT</th>"]
-    head += [f"<th>{p}</th>" for p in PORT_ORDER]
+    head += [f"<th>{c}</th>" for c in labels]
     head.append("<th class='sep'>TOT</th>")
-    head += [f"<th>{p}</th>" for p in PORT_ORDER]
+    head += [f"<th>{c}</th>" for c in labels]
     head.append("</tr></thead><tbody>")
 
     body = []
@@ -174,12 +189,20 @@ def certs_report_html(df: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp, 
             w = abs(t) / scale * 50
             bar = f"<i class='{'up' if t > 0 else 'dn'}' style='width:{w:.1f}%'></i>"
         row = [f"<tr><td class='d'>{r['Date'].strftime('%d-%b-%y')}</td><td class='tot'>{num(r[tot])}</td>"]
-        row += [f"<td>{num(r[c])}</td>" for c in cols]
+        row += [f"<td>{num(r[c])}</td>" for c in labels]
         row.append(f"<td class='cb sep'>{bar}<span>{sgn(t)}</span></td>")
-        row += [f"<td>{sgn(r[c + '_c'])}</td>" for c in cols]
+        row += [f"<td>{sgn(r[c + '_c'])}</td>" for c in labels]
         row.append("</tr>")
         body.append("".join(row))
     return "".join(head) + "".join(body) + "</tbody></table></div>"
+
+
+def countries_by_stock(df: pd.DataFrame, grade: str = "VG") -> dict:
+    """COUNTRY_PORTS reordered so the country with the most certs today is first."""
+    last = df.iloc[-1]
+    size = {c: sum(0 if pd.isna(last[f"LRC-{p}-{grade}"]) else last[f"LRC-{p}-{grade}"] for p in ports)
+            for c, ports in COUNTRY_PORTS.items()}
+    return {c: COUNTRY_PORTS[c] for c in sorted(size, key=lambda c: -size[c])}
 
 
 PORT_COLORS = {
@@ -238,7 +261,6 @@ if commodity == "Coffee":
             certs = load_rc_certs()
             end = certs["Date"].max()
             start = end - pd.DateOffset(years=HISTORY_YEARS)
-            st.markdown(certs_report_html(certs, start, end), unsafe_allow_html=True)
             c_min, c_max = certs["Date"].min(), certs["Date"].max()
             span = st.radio("History", ["1Y", "3Y", "5Y", "All", "Custom"], horizontal=True,
                             label_visibility="collapsed", key="rc_chart_span")
@@ -261,3 +283,9 @@ if commodity == "Coffee":
                 st.plotly_chart(total_certs_fig(cview), width="stretch", config={"displayModeBar": False})
             with ch2:
                 st.plotly_chart(ports_certs_fig(cview), width="stretch", config={"displayModeBar": False})
+            st.markdown(certs_report_html(certs, start, end, countries_by_stock(certs),
+                                          "Certs Per Country", "Daily Change Per Country", height="38vh"),
+                        unsafe_allow_html=True)
+            st.markdown(certs_report_html(certs, start, end, {p: [p] for p in PORT_ORDER},
+                                          "Certs Per Ports", "Daily Change Per Port"),
+                        unsafe_allow_html=True)
