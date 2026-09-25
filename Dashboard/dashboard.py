@@ -3158,8 +3158,6 @@ def render_arb(kc: pd.DataFrame, g: pd.DataFrame, gdays: pd.Series, gr: pd.DataF
         st.plotly_chart(arb_dual_fig(dv, [("share_certs", "Arabica share of certs (%)", NAVY)], arb, "Arb (USD/MT)",
                                      "Arb spread vs Arabica share of certified stocks", "Arabica share (%)", "Arb (USD/MT)"),
                         width="stretch", config=cfgc, key="arb_c1")
-        st.plotly_chart(arb_dual_fig(dv, [("A_certs", "Arabica (MT)", NAVY), ("R_certs", "Robusta (MT)", AMBER)], "ratio", "KC / RC",
-                                     "KC / RC ratio vs certified stocks", "Certs (MT)", "KC / RC"), width="stretch", config=cfgc, key="arb_c2")
     elif v == "Arb vs Grading":
         pl_section("Arb and graded, rolling 1 month")
         st.plotly_chart(arb_dual_fig(dv, [("A_graded", "Arabica (MT)", NAVY), ("R_graded", "Robusta (MT)", AMBER)], arb, "Arb (USD/MT)",
