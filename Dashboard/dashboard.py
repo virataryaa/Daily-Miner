@@ -92,8 +92,8 @@ div[role="radiogroup"] label:has(input:checked) div[data-testid="stMarkdownConta
 .st-key-coffee_section_box div[role="radiogroup"] label { padding: 8px 34px !important; min-width: 90px; text-align: center; }
 .st-key-coffee_section_box div[role="radiogroup"] label p { font-size: 15px !important; }
 
-.st-key-rc_view_box div[role="radiogroup"] label, .st-key-rg_view_box div[role="radiogroup"] label { padding: 4px 13px !important; }
-.st-key-rc_view_box div[role="radiogroup"] label p, .st-key-rg_view_box div[role="radiogroup"] label p { font-size: 13px !important; }
+.st-key-rc_view_box div[role="radiogroup"] label, .st-key-rg_view_box div[role="radiogroup"] label, .st-key-cmb_pl_box div[role="radiogroup"] label { padding: 4px 13px !important; }
+.st-key-rc_view_box div[role="radiogroup"] label p, .st-key-rg_view_box div[role="radiogroup"] label p, .st-key-cmb_pl_box div[role="radiogroup"] label p { font-size: 13px !important; }
 .st-key-cmb_unit_box { display: flex; justify-content: flex-end; }
 .st-key-cmb_unit_box div[role="radiogroup"] label { padding: 4px 13px !important; }
 .st-key-cmb_unit_box div[role="radiogroup"] label p { font-size: 13px !important; }
@@ -2971,7 +2971,7 @@ def render_combined(kc: pd.DataFrame, g: pd.DataFrame, gdays: pd.Series, gr: pd.
     top_l, top_r = st.columns([6, 1.6])
     with top_l:
         with st.container(key="rc_view_box"):
-            view = st.radio("View", ["Certs Table", "Certs Visuals", "Grading", "Origin & Port"], horizontal=True,
+            view = st.radio("View", ["Certs Table", "Certs Visuals", "Grading", "Origin & Port", "Price Link"], horizontal=True,
                             label_visibility="collapsed", key="cmb_view")
     with top_r:
         with st.container(key="cmb_unit_box"):
@@ -2999,6 +2999,9 @@ def render_combined(kc: pd.DataFrame, g: pd.DataFrame, gdays: pd.Series, gr: pd.
             st.plotly_chart(cmb_certs_bar_fig(dv, unit), width="stretch", config=cfgc, key="cmb_bar")
         with right:
             st.plotly_chart(cmb_certs_line_fig(dv, unit), width="stretch", config=cfgc, key="cmb_line")
+
+    elif view == "Price Link":
+        render_arb(kc, g, gdays, gr, rc_certs)
 
     elif view == "Grading":
         o0, o1, o2, _ = st.columns([2.2, 2.4, 2.4, 1.6])
@@ -3046,6 +3049,139 @@ def render_combined(kc: pd.DataFrame, g: pd.DataFrame, gdays: pd.Series, gr: pd.
             st.plotly_chart(cmb_rolling_fig(a, f"Arabica: {lab} ({unit})", unit, start_a), width="stretch", config=cfgc, key="cmb_op_roll_a")
         with right:
             st.plotly_chart(cmb_rolling_fig(r, f"Robusta: {lab} ({unit})", unit, start_r), width="stretch", config=cfgc, key="cmb_op_roll_r")
+
+
+ARB_KG = 22.0462      # c/lb -> USD/MT
+
+
+def _on(s: pd.Series, bd: pd.DatetimeIndex, limit: int = 25) -> pd.Series:
+    return s.reindex(s.index.union(bd)).ffill(limit=limit).reindex(bd)
+
+
+def _flow_on(s: pd.Series, bd: pd.DatetimeIndex) -> pd.Series:
+    """A daily flow on the price calendar: unknown before it starts, zero on days without an entry after that."""
+    out = s.reindex(bd)
+    out.loc[out.index >= s.index.min()] = out.loc[out.index >= s.index.min()].fillna(0)
+    return out
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def arb_frame(pl_k: pd.DataFrame, pl_r: pd.DataFrame, kc_certs: pd.Series, rc_certs: pd.Series, kc_graded: pd.Series,
+              rc_graded: pd.Series, kc_usage: pd.Series, rc_usage: pd.Series) -> pd.DataFrame:
+    """Arabica - Robusta arb (C1 on both, USD/MT) with the certs, graded and usage of each coffee in MT on the same days."""
+    px = pd.concat([pl_k["c1"].rename("kc"), pl_r["c1"].rename("rc")], axis=1).dropna()
+    bd = px.index
+    d = pd.DataFrame(index=bd)
+    d["spread"] = px["kc"] * ARB_KG - px["rc"]
+    d["ratio"] = px["kc"] * ARB_KG / px["rc"]
+    d["A_certs"], d["R_certs"] = _on(kc_certs * BAG_MT, bd), _on(rc_certs * LOT_MT, bd)
+    for key, a, r in (("graded", kc_graded * BAG_MT, rc_graded * LOT_MT), ("usage", kc_usage * BAG_MT, rc_usage * LOT_MT)):
+        d[f"A_{key}"] = _flow_on(a, bd).rolling(21, min_periods=21).sum()
+        d[f"R_{key}"] = _flow_on(r, bd).rolling(21, min_periods=21).sum()
+    for key in ("certs", "graded", "usage"):
+        tot = d[f"A_{key}"] + d[f"R_{key}"]
+        d[f"share_{key}"] = (d[f"A_{key}"] / tot * 100).where(tot > 0)
+    return d
+
+
+def arb_dual_fig(d: pd.DataFrame, lefts: list, right: str, right_name: str, title: str, l_title: str, r_title: str,
+                 height: int = 340) -> go.Figure:
+    """lefts: [(column, name, colour)] on the left axis, the arb line on the right axis."""
+    fig = go.Figure()
+    for col, name, colr in lefts:
+        v = d[col].dropna()
+        fig.add_trace(go.Scatter(x=v.index, y=v.values, mode="lines", name=name, line=dict(color=colr, width=1.8),
+                                 hovertemplate="%{y:,.1f}<extra>" + name + "</extra>"))
+    v = d[right].dropna()
+    fig.add_trace(go.Scatter(x=v.index, y=v.values, mode="lines", name=right_name, yaxis="y2", line=dict(color=RED, width=1.6),
+                             hovertemplate="%{y:,.1f}<extra>" + right_name + "</extra>"))
+    chart_layout(fig, title, height)
+    fig.update_layout(hovermode="x unified", yaxis=dict(title=l_title, tickformat=","),
+                      yaxis2=dict(title=r_title, overlaying="y", side="right", showgrid=False, tickformat=","),
+                      legend=dict(orientation="h", y=1.02, x=1, xanchor="right", yanchor="bottom"), margin=dict(t=56, b=8, l=8, r=8))
+    return fig
+
+
+def arb_together_fig(d: pd.DataFrame, height: int = 800) -> go.Figure:
+    from plotly.subplots import make_subplots
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05,
+                        subplot_titles=("Arb spread, KC C1 - RC C1 (USD/MT)", "Arabica share of certified stocks (%)",
+                                        "Arabica share of graded and usage, rolling 1 month (%)"))
+    rows = ((1, "spread", "Arb", RED), (2, "share_certs", "Certs", NAVY), (3, "share_graded", "Graded", TEAL), (3, "share_usage", "Usage", AMBER))
+    for r, col, name, colr in rows:
+        v = d[col].dropna()
+        fig.add_trace(go.Scatter(x=v.index, y=v.values, mode="lines", name=name, line=dict(color=colr, width=1.8),
+                                 hovertemplate="%{y:,.1f}<extra>" + name + "</extra>"), row=r, col=1)
+    chart_layout(fig, "Arb, certs, graded and usage together", height)
+    fig.update_layout(hovermode="x unified", legend=dict(orientation="h", y=1.03, x=1, xanchor="right", yanchor="bottom"),
+                      margin=dict(t=72, b=8, l=8, r=8))
+    for ann in fig.layout.annotations:
+        ann.font = dict(size=12, color=NAVY)
+        ann.x = 0
+        ann.xanchor = "left"
+    return fig
+
+
+def arb_lag_fig(d: pd.DataFrame, height: int = 340) -> go.Figure:
+    ch = d["spread"].diff(21)
+    fig = go.Figure()
+    ks = list(range(-60, 61, 5))
+    for col, name, colr in (("share_certs", "Certs", NAVY), ("share_graded", "Graded", TEAL), ("share_usage", "Usage", AMBER)):
+        x = d[col].diff(21)
+        fig.add_trace(go.Scatter(x=ks, y=[ch.corr(x.shift(k)) for k in ks], mode="lines+markers", name=name,
+                                 line=dict(color=colr, width=1.8), marker=dict(size=4), hovertemplate="%{y:+.2f}<extra>" + name + "</extra>"))
+    chart_layout(fig, "Correlation: 1-month change in Arabica share vs 1-month change in arb, by lead (days)", height)
+    fig.update_layout(hovermode="x unified", xaxis=dict(title="Share leads arb by (days)", dtick=10),
+                      yaxis=dict(title="Correlation", zeroline=True, zerolinecolor="#9aa3b8", tickformat=".2f"),
+                      legend=dict(orientation="h", y=1.02, x=1, xanchor="right", yanchor="bottom"), margin=dict(t=56, b=8, l=8, r=8))
+    return fig
+
+
+def render_arb(kc: pd.DataFrame, g: pd.DataFrame, gdays: pd.Series, gr: pd.DataFrame, rc_certs: pd.DataFrame) -> None:
+    cfgc = {"displayModeBar": False}
+    ku, ru = pl_series_kc(kc, g, gdays), pl_series_rc(gr, rc_certs)
+    d = arb_frame(load_price_link(), load_price_link_rc(), ku["certs"], ru["certs"],
+                  kc_gr_wide(g, gdays, "Passed").sum(axis=1), gr.groupby("PanelDate")["NoLots"].sum(), ku["usage"].dropna(), ru["usage"].dropna())
+    with st.container(key="cmb_pl_box"):
+        v = st.radio("Arb view", ["Arb vs Certs", "Arb vs Grading", "Arb vs Usage", "All Together", "Scatter"], horizontal=True,
+                     label_visibility="collapsed", key="cmb_pl_view")
+    st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+    default = "3Y" if v in ("All Together", "Scatter") else "All"
+    c1, _ = st.columns([1.8, 5])
+    with c1:
+        span = pl_span_radio("cmb_pl_span", default)
+    dv = _since(d, pl_start(span, d.index.max()))
+    A, R, arb = ("Arabica", NAVY), ("Robusta", AMBER), "spread"
+
+    if v == "Arb vs Certs":
+        pl_section("Arb and certified stocks")
+        st.plotly_chart(arb_dual_fig(dv, [("share_certs", "Arabica share of certs (%)", NAVY)], arb, "Arb (USD/MT)",
+                                     "Arb spread vs Arabica share of certified stocks", "Arabica share (%)", "Arb (USD/MT)"),
+                        width="stretch", config=cfgc, key="arb_c1")
+        st.plotly_chart(arb_dual_fig(dv, [("A_certs", "Arabica (MT)", NAVY), ("R_certs", "Robusta (MT)", AMBER)], "ratio", "KC / RC",
+                                     "KC / RC ratio vs certified stocks", "Certs (MT)", "KC / RC"), width="stretch", config=cfgc, key="arb_c2")
+    elif v == "Arb vs Grading":
+        pl_section("Arb and graded, rolling 1 month")
+        st.plotly_chart(arb_dual_fig(dv, [("A_graded", "Arabica (MT)", NAVY), ("R_graded", "Robusta (MT)", AMBER)], arb, "Arb (USD/MT)",
+                                     "Arb spread vs graded", "Graded (MT)", "Arb (USD/MT)"), width="stretch", config=cfgc, key="arb_g1")
+        st.plotly_chart(arb_dual_fig(dv, [("share_graded", "Arabica share of graded (%)", TEAL)], arb, "Arb (USD/MT)",
+                                     "Arb spread vs Arabica share of graded", "Arabica share (%)", "Arb (USD/MT)"), width="stretch", config=cfgc, key="arb_g2")
+    elif v == "Arb vs Usage":
+        pl_section("Arb and usage, rolling 1 month")
+        st.plotly_chart(arb_dual_fig(dv, [("A_usage", "Arabica (MT)", NAVY), ("R_usage", "Robusta (MT)", AMBER)], arb, "Arb (USD/MT)",
+                                     "Arb spread vs usage", "Usage (MT)", "Arb (USD/MT)"), width="stretch", config=cfgc, key="arb_u1")
+        st.plotly_chart(arb_dual_fig(dv, [("share_usage", "Arabica share of usage (%)", AMBER)], arb, "Arb (USD/MT)",
+                                     "Arb spread vs Arabica share of usage", "Arabica share (%)", "Arb (USD/MT)"), width="stretch", config=cfgc, key="arb_u2")
+    elif v == "All Together":
+        st.plotly_chart(arb_together_fig(dv), width="stretch", config=cfgc, key="arb_all")
+    else:
+        pl_section("Arb vs Arabica share")
+        cols = st.columns(3)
+        for col_, (share, ttl) in zip(cols, (("share_certs", "certs"), ("share_graded", "graded"), ("share_usage", "usage"))):
+            with col_:
+                st.plotly_chart(pl_scatter_fig(dv[share], dv["spread"], f"Arb vs share of {ttl}", f"Arabica share of {ttl} (%)",
+                                               "Arb (USD/MT)", size=430), width="content", config=cfgc, key=f"arb_sc_{share}")
+        st.plotly_chart(arb_lag_fig(dv), width="stretch", config=cfgc, key="arb_lag")
 
 
 with st.sidebar:
