@@ -183,14 +183,14 @@ COMMODITIES = ["Coffee", "Cocoa", "Sugar"]
 
 @st.cache_data(ttl=600)
 def load_rc_certs() -> pd.DataFrame:
-    df = pd.read_parquet(DB_DIR / "rc_certs.parquet")
+    df = pd.read_parquet(DB_DIR / "Main" / "RC" / "rc_certs.parquet")
     df["Date"] = pd.to_datetime(df["Date"])
     return df.sort_values("Date").reset_index(drop=True)
 
 
 @st.cache_data(ttl=600)
 def load_kc_certs() -> pd.DataFrame:
-    df = pd.read_parquet(DB_DIR / "kc_certs.parquet")
+    df = pd.read_parquet(DB_DIR / "Main" / "KC" / "kc_certs.parquet")
     df["Date"] = pd.to_datetime(df["Date"])
     return df.sort_values("Date").reset_index(drop=True)
 
@@ -978,7 +978,7 @@ PORT_COUNTRY = {"ANT": "Belgium", "LON": "UK", "FEL": "UK", "LIV": "UK", "AMS": 
 
 @st.cache_data(ttl=600)
 def load_rc_grading() -> pd.DataFrame:
-    g = pd.read_parquet(DB_DIR / "rc_grading.parquet")
+    g = pd.read_parquet(DB_DIR / "Main" / "RC" / "rc_grading.parquet")
     g["PanelDate"] = pd.to_datetime(g["PanelDate"])
     g["Origin2"] = g["Origin"].map(GRADING_ORIGIN_MAIN).fillna("Other")
     g["OriginName"] = g["Origin"].map(GRADING_ORIGIN_SHORT).fillna(g["Origin"])

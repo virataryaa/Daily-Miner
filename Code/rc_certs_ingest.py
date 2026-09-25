@@ -1,7 +1,7 @@
 """
 Robusta (LRC) Certified Stocks Ingest
 =====================================
-LSEG (lseg.data) -> Database/rc_certs.parquet
+LSEG (lseg.data) -> Database/Main/RC/rc_certs.parquet
 
 Wide table: Date | LRC-{port}-{grade} (13 ports x VG/NT/CL) | LRC_Price (LRCc1 SETTLE)
 Incremental: first run backfills from START, later runs re-pull the last
@@ -18,8 +18,8 @@ import pandas as pd
 import lseg.data as ld
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "Database" / "rc_certs.parquet"
-FIX_LOG = ROOT / "Database" / "rc_certs_fixes.csv"
+OUT = ROOT / "Database" / "Main" / "RC" / "rc_certs.parquet"
+FIX_LOG = ROOT / "Database" / "Logs" / "RC" / "rc_certs_fixes.csv"
 START = "2000-01-01"
 OVERLAP_DAYS = 45
 # Known feed glitches, fixed by linear interpolation between the last good day before and the first good day after.

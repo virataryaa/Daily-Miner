@@ -1,7 +1,7 @@
 """
 Arabica (KC) Certified Stocks + Grading Ingest
 ===============================================
-LSEG (lseg.data) -> Database/kc_certs.parquet
+LSEG (lseg.data) -> Database/Main/KC/kc_certs.parquet
 
 Wide table: Date | KC-{origin}-{port} (17 origins incl TOT x 8 ports incl TOT)
                  | KC-{port}-PASSGRAD / -FAILGRAD (6 ports) | KC-TOT-PENDING | KC_Price (KCc1 SETTLE)
@@ -20,7 +20,7 @@ import pandas as pd
 import lseg.data as ld
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "Database" / "kc_certs.parquet"
+OUT = ROOT / "Database" / "Main" / "KC" / "kc_certs.parquet"
 START = "2000-01-01"
 OVERLAP_DAYS = 45
 

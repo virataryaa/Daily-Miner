@@ -9,7 +9,7 @@ Order of work: **Robusta (LRC / RC) first**, then Arabica (KC).
 | Folder | Purpose |
 |---|---|
 | Code | Ingest / builder scripts (LSEG pulls, parquet writers) |
-| Database | Parquet + grading feed outputs |
+| Database | Main/ (parquet DBs), Manual Inputs/ (daily excel drops), Archive/ (old workbooks), Logs/ (each split by KC, RC, CC, QC) |
 | Dashboard | Streamlit app (`cert_app.py` equivalent) |
 | Automator | Scheduler / bat / email automation |
 
@@ -131,3 +131,15 @@ This folder has no `.git` of its own. Running git here resolves to the git repo 
 3. Decide the RC grading feed source (manual Excel vs automated).
 4. Build the Robusta dashboard in Dashboard/, then Automator/.
 5. Then repeat for Arabica (KC).
+
+
+## Database layout
+
+| Folder | Purpose |
+|---|---|
+| Database/Manual Inputs/{KC,RC,CC,QC} | Daily excel files saved by hand. KC = ICE Coffee C certified stock report (any file name), RC = RC_Grading_Feed.xlsx |
+| Database/Main/{KC,RC,CC,QC} | Final parquet databases read by the dashboard |
+| Database/Archive/{KC,RC} | Old manual workbooks (Arabica BI*.xlsx), used only by kc_grading_ingest.py --rebuild |
+| Database/Logs/{KC,RC,CC,QC} | Cleaning, quarantine and reconciliation logs |
+
+KC grading: drop the day's ICE xls into Manual Inputs/KC and run Code/kc_grading_ingest.py. It parses by section title, reconciles every block against Total in Bags, and a daily file overrides history for its date.

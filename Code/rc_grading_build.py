@@ -1,7 +1,7 @@
 """
 Robusta (RC) Grading Database Builder
 =====================================
-Database/source/RC_Grading_Feed.xlsx -> Database/rc_grading.parquet
+Database/Manual Inputs/RC/RC_Grading_Feed.xlsx -> Database/Main/RC/rc_grading.parquet
 
 The grading panel is NOT on LSEG (no LRC-*-PASSGRAD/PENDING RICs exist), so the
 source is the Excel feed exported from the exchange. This script only cleans it:
@@ -19,8 +19,8 @@ import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
-SRC = ROOT / "Database" / "source" / "RC_Grading_Feed.xlsx"
-OUT = ROOT / "Database" / "rc_grading.parquet"
+SRC = ROOT / "Database" / "Manual Inputs" / "RC" / "RC_Grading_Feed.xlsx"
+OUT = ROOT / "Database" / "Main" / "RC" / "rc_grading.parquet"
 
 
 def main():
