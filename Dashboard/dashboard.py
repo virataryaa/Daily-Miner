@@ -2477,6 +2477,27 @@ def kc_spread_certs_frame(pl: pd.DataFrame, kc: pd.DataFrame, eom: pd.DataFrame,
     return df[df["stocks"] > 0]
 
 
+@st.cache_data(ttl=600)
+def load_price_link_rc() -> pd.DataFrame:
+    d = pd.read_parquet(DB_DIR / "Main" / "RC" / "price_link_rc.parquet")
+    d.index = pd.to_datetime(d.index)
+    return d.sort_index()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def rc_spread_certs_frame(pl: pd.DataFrame, certs: pd.DataFrame, freq: str = "Monthly", grade: str = "VG") -> pd.DataFrame:
+    """Robusta C1 - C2 (USD/MT) against LRC certified stocks (lots, the dashboard's VG series). Monthly: average
+    spread vs the month's last certs print (latest month is month-to-date); Daily: same-day certs."""
+    sp = pl["spread_c12"].dropna()
+    tot = certs.dropna(subset=[f"LRC-TOT-{grade}"]).set_index("Date")[f"LRC-TOT-{grade}"].astype(float)
+    if freq == "Daily":
+        df = pd.concat([sp.rename("spread"), tot.rename("stocks")], axis=1).dropna()
+    else:
+        df = pd.concat([sp.groupby(sp.index.to_period("M")).mean().rename("spread"),
+                        tot.groupby(tot.index.to_period("M")).last().rename("stocks")], axis=1).dropna()
+    return df[df["stocks"] > 0]
+
+
 def kc_spread_fit(df: pd.DataFrame):
     """spread = a + b * ln(stocks), least squares (stocks in 000s bags, at least 1k bags)."""
     d = df[df["stocks"] >= 1.0]
@@ -2485,7 +2506,9 @@ def kc_spread_fit(df: pd.DataFrame):
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def kc_spread_vs_certs_fig(df: pd.DataFrame, freq: str = "Monthly", height: int = 560) -> go.Figure:
+def kc_spread_vs_certs_fig(df: pd.DataFrame, freq: str = "Monthly", height: int = 560, name: str = "KC",
+                           x_title: str = "Cert Stocks (000s Bags)", y_title: str = "1/2 Spread (c/lb)",
+                           x_unit: str = "k bags") -> go.Figure:
     a, b = kc_spread_fit(df)
     monthly = freq == "Monthly"
     fmt = "%b-%y" if monthly else "%d-%b-%y"
@@ -2497,22 +2520,22 @@ def kc_spread_vs_certs_fig(df: pd.DataFrame, freq: str = "Monthly", height: int 
     fig.add_trace(Scatter(x=hist["stocks"], y=hist["spread"], mode="markers", name=freq,
                           marker=dict(symbol="square", size=6 if monthly else 4, color="#2f78b7",
                                       opacity=1 if monthly else 0.55),
-                          customdata=lab, hovertemplate="%{customdata}<br>Certs %{x:,.0f}k bags | Spread %{y:.1f}<extra></extra>"))
+                          customdata=lab, hovertemplate="%{customdata}<br>Certs %{x:,.0f} " + x_unit + " | Spread %{y:.1f}<extra></extra>"))
     xs = np.linspace(max(float(df["stocks"].min()), 1.0), float(df["stocks"].max()), 300)
     fig.add_trace(go.Scatter(x=xs, y=a + b * np.log(xs), mode="lines", name="Fit", line=dict(color="#111111", width=2),
                              hoverinfo="skip"))
     fig.add_trace(go.Scatter(x=[last["stocks"]], y=[last["spread"]], mode="markers", name=last_lab,
                              marker=dict(symbol="square", size=10, color=GREEN, line=dict(color="#111111", width=1)),
-                             hovertemplate=f"{last_lab}{' (month to date)' if monthly else ''}<br>Certs %{{x:,.0f}}k bags | "
+                             hovertemplate=f"{last_lab}{' (month to date)' if monthly else ''}<br>Certs %{{x:,.0f}} {x_unit} | "
                                            "Spread %{y:.1f}<extra></extra>"))
     fig.add_annotation(x=last["stocks"], y=last["spread"], text=f"<b>{last_lab}</b>", showarrow=True,
                        arrowhead=0, ax=28, ay=-30, font=dict(size=12, color="#111111"))
     sub = (f"Monthly average spreads, end-month cert stocks, {df.index[0].strftime('%b %Y')} to date" if monthly else
            f"Daily spreads vs daily cert stocks, {df.index[0].strftime('%b %Y')} to date")
-    chart_layout(fig, f"<b>KC 1/2 Spread vs Cert Stocks</b><br><sup>{sub}</sup>", height)
+    chart_layout(fig, f"<b>{name} 1/2 Spread vs Cert Stocks</b><br><sup>{sub}</sup>", height)
     fig.update_layout(showlegend=False, hovermode="closest", margin=dict(t=64, b=8, l=8, r=8),
-                      xaxis=dict(title="Cert Stocks (000s Bags)", tickformat=",", rangemode="tozero", gridcolor="rgba(10,36,99,0.06)"),
-                      yaxis=dict(title="1/2 Spread (c/lb)", zeroline=True, zerolinecolor="#9aa3b8", gridcolor="rgba(10,36,99,0.08)"))
+                      xaxis=dict(title=x_title, tickformat=",", rangemode="tozero", gridcolor="rgba(10,36,99,0.06)"),
+                      yaxis=dict(title=y_title, zeroline=True, zerolinecolor="#9aa3b8", gridcolor="rgba(10,36,99,0.08)"))
     return fig
 
 
@@ -2974,7 +2997,7 @@ if commodity == "Coffee":
         # Certs/Grading views, or the sub-views inside them, feel slow - every click anywhere on
         # the page was silently rebuilding every table and chart in every tab, every time.
         with st.container(key="rc_section_box"):
-            rc_section = st.radio("Section", ["Comprehensive View", "Certs", "Grading", "Certs & Grading"], horizontal=True,
+            rc_section = st.radio("Section", ["Comprehensive View", "Certs", "Grading", "Certs & Grading", "Price Link"], horizontal=True,
                                   label_visibility="collapsed", key="rc_section")
         st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
@@ -2987,6 +3010,21 @@ if commodity == "Coffee":
             st.markdown(rc_comp_html(gr, certs, False, rcv_all, "72vh", "VG", n_rv), unsafe_allow_html=True)
             st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
             st.markdown(rc_comp_html(gr, certs, True, rcv_all, "auto"), unsafe_allow_html=True)
+
+        elif rc_section == "Price Link":
+            certs = load_rc_certs()
+            with st.container(key="rc_view_box"):
+                st.radio("View", ["Spread vs Certs"], horizontal=True, label_visibility="collapsed", key="rpl_view")
+            st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+            rpl1, _ = st.columns([1.4, 4])
+            with rpl1:
+                st.markdown("<div class='sb-label' style='margin:0 0 2px'>Frequency</div>", unsafe_allow_html=True)
+                rpl_freq = st.radio("Frequency", ["Monthly", "Daily"], horizontal=True,
+                                    label_visibility="collapsed", key="rpl_freq")
+            rpl_df = rc_spread_certs_frame(load_price_link_rc(), certs, rpl_freq)
+            st.plotly_chart(kc_spread_vs_certs_fig(rpl_df, rpl_freq, 560, "LRC", "Cert Stocks (Lots)",
+                                                   "1/2 Spread ($/MT)", "lots"),
+                            width="stretch", config={"displayModeBar": False}, key="rpl_chart")
 
         elif rc_section == "Certs":
             certs = load_rc_certs()

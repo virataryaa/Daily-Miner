@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT_DIR = ROOT / "Database" / "Main" / "KC"
 PL = OUT_DIR / "price_link_kc.parquet"
 EOM = OUT_DIR / "kc_certs_eom_hist.parquet"
+RC_PL = ROOT / "Database" / "Main" / "RC" / "price_link_rc.parquet"   # Robusta: LRCc1 / LRCc2 (USD/MT), 2008 onward
 EOM_XLS = ROOT / "Database" / "Archive" / "KC" / "EOM_KC_cert_stox_by_port_nov96-present.xls"
 LSEG_DIR = Path(r"C:\Users\virat.arya\ETG\SoftsDatabase - Documents\Database\Hardmine\LSEG")
 ROLLEX = LSEG_DIR / "Rollex" / "Database" / "rollex_KC.parquet"
@@ -34,14 +35,14 @@ CYCLE = ["H", "K", "N", "U", "Z"]                   # KC contract months
 MONTH_TO_LETTER = {"Mar": "H", "May": "K", "Jul": "N", "Sep": "U", "Dec": "Z"}
 
 
-def pull_c1c2(full: bool) -> pd.DataFrame:
+def pull_c1c2(full: bool, root: str = "KC", path: Path = PL, first: str = START) -> pd.DataFrame:
     import lseg.data as ld
-    old = pd.read_parquet(PL)[["c1", "c2"]] if PL.exists() and not full else pd.DataFrame(columns=["c1", "c2"])
-    start = START if old.empty else (old.index.max() - pd.Timedelta(days=OVERLAP_DAYS)).strftime("%Y-%m-%d")
+    old = pd.read_parquet(path)[["c1", "c2"]] if path.exists() and not full else pd.DataFrame(columns=["c1", "c2"])
+    start = first if old.empty else (old.index.max() - pd.Timedelta(days=OVERLAP_DAYS)).strftime("%Y-%m-%d")
     ld.open_session()
     try:
         cols = {}
-        for ric, name in (("KCc1", "c1"), ("KCc2", "c2")):
+        for ric, name in ((f"{root}c1", "c1"), (f"{root}c2", "c2")):
             d = ld.get_history(universe=ric, fields=["SETTLE"], start=start, end=pd.Timestamp.today().strftime("%Y-%m-%d"),
                                interval="daily", count=100000)
             d.index = pd.to_datetime(d.index)
@@ -129,3 +130,13 @@ if __name__ == "__main__":
     eom = parse_eom()
     eom.to_parquet(EOM, index=False)
     print(f"kc_certs_eom_hist: {len(eom)} months {eom['Date'].min().date()} -> {eom['Date'].max().date()}")
+
+    # Robusta: continuation c1/c2 only (its certs come from the LSEG rc_certs database)
+    RC_PL.parent.mkdir(parents=True, exist_ok=True)
+    if a.no_lseg and RC_PL.exists():
+        rc = pd.read_parquet(RC_PL)[["c1", "c2"]]
+    else:
+        rc = pull_c1c2(a.full, "LRC", RC_PL, "2008-01-01")
+    rc["spread_c12"] = rc["c1"] - rc["c2"]
+    rc.to_parquet(RC_PL)
+    print(f"price_link_rc: {len(rc):,} rows {rc.index.min().date()} -> {rc.index.max().date()}")
