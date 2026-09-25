@@ -149,3 +149,9 @@ KC grading: drop the day's ICE xls into Manual Inputs/KC and run Code/kc_grading
 - Source: ICE daily certified-stock xls (Passed, Failed, Pending by origin and port), history 2023-07 onward. Certs come from LSEG and match the ICE report exactly on every overlapping day.
 - Usage is same-day: Usage = Bags Passed - change in total certs (KC-TOT-TOT). No lag, unlike Robusta.
 - Cumulative charts show the latest 3 crop years as lines (no bands); every crop-year slicer defaults to July.
+
+## Price Link (Arabica)
+
+- Sub-tab Spread vs Certs: monthly average KC 1/2 spread against end-of-month certified stocks, with a ln fit and the latest month highlighted.
+- Spread basis toggle: Rollex (active contract minus the next contract, per-contract settlements, 2010 onward, skips the expiring contract) or C1 - C2 (LSEG continuation, 1996 onward, distorted in delivery months).
+- Data: Code/price_link_sync.py writes Database/Main/KC/price_link_kc.parquet (c1, c2 from LSEG plus the Rollex active contract from the Rollex and Arb databases) and kc_certs_eom_hist.parquet (ICE month-end stocks from Nov 1996, source xls in Database/Archive/KC). Run it daily after the Rollex automator (needs LSEG open), or with --no-lseg to only re-derive from local files.
