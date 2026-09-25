@@ -2848,17 +2848,30 @@ def cmb_certs_bar_fig(df: pd.DataFrame, unit: str, height: int = 420) -> go.Figu
     return fig
 
 
+CMB_FREQ = {"1 day": None, "1 week": "W-SUN", "1 month": "M"}
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
-def cmb_monthly_blocks(g: pd.DataFrame, gdays: pd.Series, gr: pd.DataFrame) -> tuple:
-    """Monthly graded by origin: Arabica Passed bags and Robusta lots (raw units, PeriodIndex)."""
+def cmb_grading_blocks(g: pd.DataFrame, gdays: pd.Series, gr: pd.DataFrame, freq: str) -> tuple:
+    """Graded by origin per day, week (Monday to Sunday) or month: Arabica Passed bags and Robusta lots (raw units)."""
     kp = kc_gr_wide(g, pd.Series(gdays), "Passed")
-    ka = kp.groupby(kp.index.to_period("M")).sum()
     rr = gr.groupby(["PanelDate", "OriginName"])["NoLots"].sum().unstack(fill_value=0)
-    rm = rr.groupby(rr.index.to_period("M")).sum()
-    return ka, rm
+    per = CMB_FREQ[freq]
+    if per is None:
+        return kp, rr
+    return kp.groupby(kp.index.to_period(per)).sum(), rr.groupby(rr.index.to_period(per)).sum()
 
 
-def cmb_grading_table_html(ka: pd.DataFrame, rm: pd.DataFrame, unit: str, show_all: bool, top_n: int = 6) -> str:
+def cmb_row_label(k, freq: str) -> str:
+    if freq == "1 day":
+        return k.strftime("%d-%b-%y")
+    if freq == "1 week":
+        return "Wk " + k.start_time.strftime("%d-%b-%y")
+    return k.strftime("%b %Y")
+
+
+def cmb_grading_table_html(ka: pd.DataFrame, rm: pd.DataFrame, unit: str, show_all: bool, freq: str = "1 month",
+                           nrows: int = 0, top_n: int = 6) -> str:
     A, R = to_unit("KC", ka, unit), to_unit("RC", rm, unit)
 
     def block(df):
@@ -2871,21 +2884,25 @@ def cmb_grading_table_html(ka: pd.DataFrame, rm: pd.DataFrame, unit: str, show_a
 
     ab, rb = block(A), block(R)
     months = sorted(set(A.index) | set(R.index), reverse=True)
-    ab, rb = ab.reindex(months), rb.reindex(months)          # months before a coffee's data starts stay blank
+    if nrows:
+        months = months[:nrows]
+    ab, rb = ab.reindex(months), rb.reindex(months)          # periods before a coffee's data starts stay blank
     at_, rt = ab.sum(axis=1, min_count=1), rb.sum(axis=1, min_count=1)
     comb = at_.fillna(0) + rt.fillna(0)
     sa, sr = max(float(ab.max().max()), 1.0), max(float(rb.max().max()), 1.0)
     sta, str_, stc = max(float(at_.max()), 1.0), max(float(rt.max()), 1.0), max(float(comb.max()), 1.0)
     na, nr = len(ab.columns) + 1, len(rb.columns) + 1
-    out = [f"<div class='mt' style='margin-bottom:4px'>Graded per month by origin, Arabica and Robusta side by side ({unit})</div>",
-           "<div class='rwrap' style='height:auto'><table class='rpt cmp'><thead><tr class='h1'><th class='dt' rowspan='2'>Month</th>",
+    first = {"1 day": "Day", "1 week": "Week", "1 month": "Month"}[freq]
+    out = [f"<div class='mt' style='margin-bottom:4px'>Graded per {freq.split()[1]} by origin, Arabica and Robusta side by side ({unit})</div>",
+           f"<div class='rwrap' style='height:{'72vh' if freq != '1 month' else 'auto'}'><table class='rpt cmp'><thead><tr class='h1'>"
+           f"<th class='dt' rowspan='2'>{first}</th>",
            f"<th colspan='{na}'>Arabica graded by origin</th><th colspan='{nr}' class='sep certs-hdr'>Robusta graded by origin</th>",
            "<th class='sep'>Both</th></tr><tr class='h2'>"]
     out += [f"<th>{o}</th>" for o in ab.columns] + ["<th>Total</th>"]
     out += [f"<th class='certs-hdr{' sep' if i == 0 else ''}'>{o}</th>" for i, o in enumerate(list(rb.columns) + ["Total"])]
     out += ["<th class='sep'>Total</th></tr></thead><tbody>"]
     for m in months:
-        row = [f"<tr><td class='d'>{m.strftime('%b %Y')}</td>"]
+        row = [f"<tr><td class='d'>{cmb_row_label(m, freq)}</td>"]
         row += [_heat_td(ab.loc[m, o], sa) for o in ab.columns] + [_bar_td(at_[m], sta) if pd.notna(at_[m]) else "<td class='na'></td>"]
         cells = [_heat_td(rb.loc[m, o], sr) for o in rb.columns]
         cells[0] = cells[0].replace("<td", "<td class='sep'", 1)
@@ -2961,13 +2978,20 @@ def render_combined(kc: pd.DataFrame, g: pd.DataFrame, gdays: pd.Series, gr: pd.
         st.plotly_chart(cmb_certs_bar_fig(_since(df, pl_start(span, df.index.max())), unit), width="stretch", config=cfgc, key="cmb_bar")
 
     elif view == "Grading":
-        ka, rm = cmb_monthly_blocks(g, gdays, gr)
-        o1, _ = st.columns([2.2, 4])
+        o0, o1, o2, _ = st.columns([2.2, 2.4, 2.4, 1.6])
+        with o0:
+            st.markdown("<div class='sb-label' style='margin:0 0 2px'>Group by</div>", unsafe_allow_html=True)
+            gfreq = st.radio("Group by", list(CMB_FREQ), index=2, horizontal=True, label_visibility="collapsed", key="cmb_gr_freq")
         with o1:
             st.markdown("<div class='sb-label' style='margin:0 0 2px'>Origins shown</div>", unsafe_allow_html=True)
             show_all = st.radio("Origins", ["Top 6 + Other", "Show all origins"], horizontal=True, label_visibility="collapsed",
                                 key="cmb_gr_all") == "Show all origins"
-        st.markdown(cmb_grading_table_html(ka, rm, unit, show_all), unsafe_allow_html=True)
+        n_gr = 0
+        if gfreq == "1 day":
+            with o2:
+                n_gr = rows_radio("cmb_gr_rows")
+        ka, rm = cmb_grading_blocks(g, gdays, gr, gfreq)
+        st.markdown(cmb_grading_table_html(ka, rm, unit, show_all, gfreq, n_gr), unsafe_allow_html=True)
 
     else:
         kp_cols = list(kc_gr_wide(g, gdays, "Passed").columns)
