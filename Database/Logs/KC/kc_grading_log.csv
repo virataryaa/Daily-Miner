@@ -1,13 +1,14 @@
 Logged,Date,Source,Kind,Detail
-2026-09-25 12:42,,history,DROP_BLANK,"2576 rows with blank Bags (stale/pasted headers), blank != 0"
-2026-09-25 12:42,2023-09-20,history,CONFLICT_DROPPED,"Failed/Brazil/Antwerp: [np.float64(1610.0), np.float64(12831.0)] unresolved, key removed"
-2026-09-25 12:42,2024-05-16,history,RECONCILE,Failed/Antwerp: origins sum 4740 != Total in Bags 5760
-2026-09-25 12:42,2024-05-16,history,RECONCILE,Failed/Ham/Bre: origins sum 0 != Total in Bags 550
-2026-09-25 12:42,2024-05-16,history,RECONCILE,Failed/New York: origins sum 0 != Total in Bags 1280
-2026-09-25 12:42,2024-06-24,history,RECONCILE,Pending/Ham/Bre: origins sum 0 != Total in Bags 825
-2026-09-25 12:42,2024-06-24,history,RECONCILE,Pending/Houston: origins sum 18700 != Total in Bags 18975
-2026-09-25 12:42,2025-06-16,history,RECONCILE,Passed/Antwerp: origins sum 5147 != Total in Bags 7377
-2026-09-25 12:42,2025-06-16,history,RECONCILE,Passed/Ham/Bre: origins sum 120 != Total in Bags 640
-2026-09-25 12:42,2024-05-16,history,QUARANTINED,"date failed reconciliation, removed until a daily ICE file is supplied"
-2026-09-25 12:42,2024-06-24,history,QUARANTINED,"date failed reconciliation, removed until a daily ICE file is supplied"
-2026-09-25 12:42,2025-06-16,history,QUARANTINED,"date failed reconciliation, removed until a daily ICE file is supplied"
+2026-09-25 13:05,,history,DROP_BLANK,"2576 rows with blank Bags (stale/pasted headers), blank != 0"
+2026-09-25 13:05,2023-09-20,history,CONFLICT_DROPPED,"Failed/Brazil/Antwerp: [np.float64(1610.0), np.float64(12831.0)] unresolved, key removed"
+2026-09-25 13:05,2023-12-09,history,DROP_WEEKEND,"ICE does not report at weekends, row(s) removed"
+2026-09-25 13:05,2024-05-16,history,RECONCILE,Failed/Antwerp: origins sum 4740 != Total in Bags 5760
+2026-09-25 13:05,2024-05-16,history,RECONCILE,Failed/Ham/Bre: origins sum 0 != Total in Bags 550
+2026-09-25 13:05,2024-05-16,history,RECONCILE,Failed/New York: origins sum 0 != Total in Bags 1280
+2026-09-25 13:05,2024-06-24,history,RECONCILE,Pending/Ham/Bre: origins sum 0 != Total in Bags 825
+2026-09-25 13:05,2024-06-24,history,RECONCILE,Pending/Houston: origins sum 18700 != Total in Bags 18975
+2026-09-25 13:05,2025-06-16,history,RECONCILE,Passed/Antwerp: origins sum 5147 != Total in Bags 7377
+2026-09-25 13:05,2025-06-16,history,RECONCILE,Passed/Ham/Bre: origins sum 120 != Total in Bags 640
+2026-09-25 13:05,2024-05-16,history,QUARANTINED,"date failed reconciliation, removed until a daily ICE file is supplied"
+2026-09-25 13:05,2024-06-24,history,QUARANTINED,"date failed reconciliation, removed until a daily ICE file is supplied"
+2026-09-25 13:05,2025-06-16,history,QUARANTINED,"date failed reconciliation, removed until a daily ICE file is supplied"

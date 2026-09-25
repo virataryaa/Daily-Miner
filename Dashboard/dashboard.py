@@ -1438,6 +1438,464 @@ def daily_grading_certs_html(gr: pd.DataFrame, certs: pd.DataFrame, grade: str =
     return "".join(head) + "".join(body) + "</tbody></table></div>"
 
 
+# ---------------------------------------------------------------------------------------------
+# Arabica (KC) grading, from the ICE daily certified-stock reports (Database/Main/KC/kc_grading)
+# ---------------------------------------------------------------------------------------------
+KC_GR_PORTS = ["Antwerp", "Barcelona", "Ham/Bre", "Houston", "Miami", "New Orleans", "New York", "Virginia"]
+KC_GR_PORT_SHORT = {"Antwerp": "ANT", "Barcelona": "BAR", "Ham/Bre": "HA/BR", "Houston": "HOU", "Miami": "MIAMI",
+                    "New Orleans": "NOLA", "New York": "NY", "Virginia": "VA"}
+KC_GR_COLORS = {"Brazil": NAVY, "Honduras": TEAL, "Peru": AMBER, "Mexico": RED, "Nicaragua": GREEN}
+KC_GR_OTHER = "#c5cbdd"
+KC_GR_CY_COLORS = ["#8a94a8", RED, NAVY]  # oldest -> newest crop year shown
+KC_MISSING_CSV = "Database/Logs/KC/kc_grading_missing_days.csv"
+
+
+@st.cache_data(ttl=600)
+def load_kc_grading():
+    g = pd.read_parquet(DB_DIR / "Main" / "KC" / "kc_grading.parquet")
+    g["Date"] = pd.to_datetime(g["Date"])
+    days = pd.read_parquet(DB_DIR / "Main" / "KC" / "kc_grading_days.parquet")
+    return g, pd.Series(sorted(pd.to_datetime(days["Date"]).unique()), name="Date")
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_gr_wide(g: pd.DataFrame, days: pd.Series, tag: str, by: str = "Origin") -> pd.DataFrame:
+    """Bags per reported day (rows) by origin/port (columns), biggest first. A reported day with no
+    row for a block means ICE showed nothing there, i.e. zero. Days we hold no file for are simply absent."""
+    days = pd.DatetimeIndex(days)
+    s = g[g["Tag"] == tag].groupby(["Date", by])["Bags"].sum().unstack(fill_value=0)
+    s = s.reindex(days, fill_value=0)
+    return s[s.sum().sort_values(ascending=False).index]
+
+
+def kc_gr_colors(origins) -> dict:
+    soft = ["#9b6bb3", "#6b7fb5", "#c0722c", "#4a5578", "#8fa3d1", "#b58f4a", GREY, "#7fa8b5"]
+    out, i = {}, 0
+    for o in origins:
+        if o in KC_GR_COLORS:
+            out[o] = KC_GR_COLORS[o]
+        else:
+            out[o] = tint(soft[i % len(soft)], max(0.85 - 0.05 * i, 0.4))
+            i += 1
+    return out
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_gr_missing(kc: pd.DataFrame, days: pd.Series) -> list:
+    days = pd.DatetimeIndex(days)
+    cal = pd.DatetimeIndex(kc.dropna(subset=["KC-TOT-TOT"])["Date"])
+    cal = cal[cal >= days.min()]
+    return sorted(set(cal) - set(days))
+
+
+def kc_gr_gap_note(kc, days) -> str:
+    miss = kc_gr_missing(kc, days)
+    if not miss:
+        return ""
+    return (f"<div class='card-desc' style='margin:2px 0 8px'>Grading files are still missing for {len(miss)} certs days "
+            f"(unknown, not zero), so cumulative and monthly totals run low across those windows. "
+            f"List: {KC_MISSING_CSV}</div>")
+
+
+def kc_range(pick: str, dmin: pd.Timestamp, dmax: pd.Timestamp):
+    months = {"Last 1M": 1, "Last 3M": 3, "Last 6M": 6, "Last 1Y": 12}
+    if pick == "All":
+        return dmin, dmax
+    return dmax - pd.DateOffset(months=months[pick]), dmax
+
+
+# ---- small html cell helpers -----------------------------------------------------------------
+def _fmt_i(v):
+    return f"{int(round(v)):,}"
+
+
+def _heat_td(v, mx, rgb="31,157,111"):
+    if pd.isna(v) or v == 0:
+        return "<td></td>"
+    return f"<td style='background:rgba({rgb},{min(abs(v) / mx, 1.0) * 0.85:.2f})'>{_fmt_i(v)}</td>"
+
+
+def _bar_td(v, sc, cls="cbl"):
+    v = 0 if pd.isna(v) else v
+    bar = f"<i style='width:{abs(v) / sc * 100:.1f}%'></i>" if v else ""
+    return f"<td class='{cls}'>{bar}<span>{_fmt_i(v)}</span></td>"
+
+
+def _delta_td(v, sc, cls="cb", pct=False):
+    if pd.isna(v):
+        return f"<td class='na {cls.replace('cb', '').strip()}'></td>"
+    bar = f"<i class='{'up' if v > 0 else 'dn'}' style='width:{abs(v) / sc * 50:.1f}%'></i>" if v else ""
+    tone = "pos" if v > 0 else "neg" if v < 0 else ""
+    txt = f"{v:+.1f}%" if pct else f"{int(round(v)):+,}"
+    return f"<td class='{cls}'>{bar}<span class='{tone}'>{txt}</span></td>"
+
+
+# ---- Grading tables -------------------------------------------------------------------------
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_gr_daily_html(g: pd.DataFrame, days: pd.Series, height: str = "60vh") -> str:
+    """One row per reported day: Passed by origin (heat), Passed / Failed totals, Pass %, Pending stock."""
+    days = pd.DatetimeIndex(days)
+    p = kc_gr_wide(g, pd.Series(days), "Passed")
+    f = kc_gr_wide(g, pd.Series(days), "Failed").sum(axis=1)
+    pend = kc_gr_wide(g, pd.Series(days), "Pending").sum(axis=1)
+    origins = [o for o in p.columns if p[o].sum() > 0]
+    pt = p.sum(axis=1)
+    rate = (pt / (pt + f).replace(0, np.nan) * 100)
+    mx = max(float(p[origins].max().max()), 1.0)
+    out = ["<div class='rwrap' style='height:", height, "'><table class='rpt'><thead>",
+           "<tr class='h1'><th class='dt' rowspan='2'>Date</th>",
+           f"<th colspan='{len(origins) + 1}'>Bags Passed by Origin</th>",
+           "<th colspan='4' class='sep'>Grading Summary</th></tr><tr class='h2'>"]
+    out += [f"<th>{o}</th>" for o in origins]
+    out += ["<th>Total</th><th class='sep'>Failed</th><th>Pass %</th><th>Pending</th><th>Passed + Failed</th></tr></thead><tbody>"]
+    pt_sc, f_sc, pe_sc = max(float(pt.max()), 1.0), max(float(f.max()), 1.0), max(float(pend.max()), 1.0)
+    for d in days[::-1]:
+        r = [f"<tr><td class='d'>{d.strftime('%d-%b-%y')}</td>"]
+        r += [_heat_td(p.loc[d, o], mx) for o in origins]
+        r.append(_bar_td(pt[d], pt_sc))
+        r.append(_heat_td(f[d], f_sc, "201,74,74").replace("<td", "<td class='sep'", 1) if f[d] else "<td class='sep'></td>")
+        r.append(f"<td>{'' if pd.isna(rate[d]) else f'{rate[d]:.1f}%'}</td>")
+        r.append(_bar_td(pend[d], pe_sc))
+        r.append(f"<td>{_fmt_i(pt[d] + f[d]) if pt[d] + f[d] else ''}</td></tr>")
+        out.append("".join(r))
+    return "".join(out) + "</tbody></table></div>"
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_gr_summary_html(g: pd.DataFrame, days: pd.Series, start: pd.Timestamp, end: pd.Timestamp) -> str:
+    """Per origin over the period: Passed, Failed, Pass %, Pending stock as of the period end."""
+    days = pd.DatetimeIndex(days)
+    sel = days[(days >= start) & (days <= end)]
+    p = kc_gr_wide(g, pd.Series(days), "Passed").reindex(sel).sum()
+    f = kc_gr_wide(g, pd.Series(days), "Failed").reindex(sel).sum()
+    pend_w = kc_gr_wide(g, pd.Series(days), "Pending")
+    pend = pend_w.loc[:end].iloc[-1] if len(pend_w.loc[:end]) else pend_w.iloc[0] * 0
+    origins = sorted(set(p.index) | set(f.index) | set(pend.index), key=lambda o: -(p.get(o, 0) + f.get(o, 0) + pend.get(o, 0)))
+    origins = [o for o in origins if (p.get(o, 0) + f.get(o, 0) + pend.get(o, 0)) > 0]
+    pm, fm, pem = (max(float(x.max()), 1.0) if len(x) else 1.0 for x in (p, f, pend))
+    out = ["<div class='rwrap' style='height:auto'><table class='rpt'><thead><tr class='h2'>",
+           "<th class='dt'>Origin</th><th>Passed</th><th>Failed</th><th>Pass %</th><th class='sep'>Pending</th></tr></thead><tbody>"]
+    for o in origins:
+        po, fo, peo = float(p.get(o, 0)), float(f.get(o, 0)), float(pend.get(o, 0))
+        pr = f"{po / (po + fo) * 100:.1f}%" if po + fo else ""
+        out.append(f"<tr><td class='d'>{o}</td>{_heat_td(po, pm)}{_heat_td(fo, fm, '201,74,74')}<td>{pr}</td>"
+                   f"{_heat_td(peo, pem, '201,138,31').replace('<td', '<td class=sep', 1) if peo else '<td class=sep></td>'}</tr>")
+    tp, tf, tpe = float(p.sum()), float(f.sum()), float(pend.sum())
+    out.append(f"<tr class='tot'><td class='d'>Total</td><td>{_fmt_i(tp)}</td><td>{_fmt_i(tf)}</td>"
+               f"<td>{f'{tp / (tp + tf) * 100:.1f}%' if tp + tf else ''}</td><td class='sep'>{_fmt_i(tpe)}</td></tr>")
+    return "".join(out) + "</tbody></table></div>"
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_gr_port_html(g: pd.DataFrame, days: pd.Series, tag: str, start: pd.Timestamp, end: pd.Timestamp) -> str:
+    """Origin x port for one block. Passed/Failed are summed over the period; Pending is the stock at the period end."""
+    days = pd.DatetimeIndex(days)
+    src = g[g["Tag"] == tag]
+    if tag == "Pending":
+        last = days[days <= end].max()
+        src = src[src["Date"] == last]
+    else:
+        src = src[(src["Date"] >= start) & (src["Date"] <= end)]
+    m = src.groupby(["Origin", "Port"])["Bags"].sum().unstack(fill_value=0).reindex(columns=KC_GR_PORTS, fill_value=0)
+    m = m[m.sum(axis=1) > 0]
+    m = m.loc[m.sum(axis=1).sort_values(ascending=False).index]
+    if m.empty:
+        return "<div class='rwrap' style='padding:14px'>No bags in this period.</div>"
+    rgb = {"Passed": "31,157,111", "Failed": "201,74,74", "Pending": "201,138,31"}[tag]
+    mx = max(float(m.max().max()), 1.0)
+    cols = [c for c in KC_GR_PORTS if m[c].sum() > 0]
+    out = ["<div class='rwrap' style='height:auto'><table class='rpt'><thead><tr class='h2'><th class='dt'>Origin</th>"]
+    out += [f"<th>{KC_GR_PORT_SHORT[c]}</th>" for c in cols] + ["<th class='sep'>Total</th></tr></thead><tbody>"]
+    for o in m.index:
+        out.append(f"<tr><td class='d'>{o}</td>" + "".join(_heat_td(m.loc[o, c], mx, rgb) for c in cols)
+                   + f"<td class='tot sep'>{_fmt_i(m.loc[o].sum())}</td></tr>")
+    out.append("<tr class='tot'><td class='d'>Total</td>" + "".join(f"<td>{_fmt_i(m[c].sum())}</td>" for c in cols)
+               + f"<td class='sep'>{_fmt_i(m.values.sum())}</td></tr>")
+    return "".join(out) + "</tbody></table></div>"
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_gr_monthly_html(g: pd.DataFrame, days: pd.Series, tag: str, height: str = "60vh") -> str:
+    """Month x origin, bags, one heat scale across every origin. Months with unfetched days run low."""
+    days = pd.DatetimeIndex(days)
+    w = kc_gr_wide(g, pd.Series(days), tag)
+    mo = w.groupby(w.index.to_period("M")).sum()
+    mo = mo[[o for o in mo.columns if mo[o].sum() > 0]]
+    tot = mo.sum(axis=1)
+    rgb = "31,157,111" if tag == "Passed" else "201,74,74"
+    mx, sc = max(float(mo.max().max()), 1.0), max(float(tot.max()), 1.0)
+    out = ["<div class='rwrap' style='height:", height, "'><table class='rpt'><thead><tr class='h1'>",
+           f"<th class='dt' rowspan='2'>Month</th><th colspan='{len(mo.columns) + 1}'>Bags {tag} by Origin</th></tr><tr class='h2'>"]
+    out += [f"<th>{o}</th>" for o in mo.columns] + ["<th>Total</th></tr></thead><tbody>"]
+    for pr in mo.index[::-1]:
+        out.append(f"<tr><td class='d'>{pr.strftime('%b %Y')}</td>" + "".join(_heat_td(mo.loc[pr, o], mx, rgb) for o in mo.columns)
+                   + _bar_td(tot[pr], sc) + "</tr>")
+    return "".join(out) + "</tbody></table></div>"
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_monthly_matrix_html(mser: pd.Series, m: int = 7, signed: bool = False, pct: bool = False) -> str:
+    """Crop year x month matrix of a monthly Series (PeriodIndex). Only months that exist are filled."""
+    if mser.empty:
+        return "<div class='rwrap' style='padding:14px'>No data.</div>"
+    per = mser.index
+    cy = np.where(per.month >= m, per.year, per.year - 1)
+    months = [(m - 1 + i) % 12 + 1 for i in range(12)]
+    tbl = (pd.DataFrame({"v": mser.values.astype(float), "cy": cy, "mo": per.month})
+           .pivot_table(index="cy", columns="mo", values="v", aggfunc="sum").reindex(columns=months))
+    ytot = tbl.sum(axis=1, min_count=1)
+    sc = max(float(np.nanmax(np.abs(tbl.values))), 1.0)
+    ysc = max(float(np.nanmax(np.abs(ytot.values))), 1.0)
+
+    def cell(v, s, cls="cbl"):
+        if pd.isna(v):
+            return "<td class='na'></td>"
+        if pct:
+            return _delta_td(v, s, "cb", pct=True)
+        if signed:
+            return _delta_td(v, s, "cb")
+        return _bar_td(v, s, cls)
+
+    out = ["<div class='rwrap' style='height:auto'><table class='rpt mx'><thead><tr class='h2'>"
+           f"<th class='dt'>{'Year' if m == 1 else 'Crop yr'}</th>"]
+    out += [f"<th>{MONTH_ABBR[mo - 1].upper()}</th>" for mo in months]
+    out += [] if pct else ["<th class='sep'>Total</th>"]
+    out += ["</tr></thead><tbody>"]
+    for yr in tbl.index:
+        row = [f"<tr><td class='d'>{crop_label(int(yr), m)}</td>"] + [cell(tbl.loc[yr, mo], sc) for mo in months]
+        if not pct:
+            row.append(cell(ytot[yr], ysc, "cbl sep") if not signed else _delta_td(ytot[yr], ysc, "cb sep"))
+        out.append("".join(row) + "</tr>")
+    return "".join(out) + "</tbody></table></div>"
+
+
+def kc_monthly_sum(s: pd.Series) -> pd.Series:
+    return s.groupby(s.index.to_period("M")).sum()
+
+
+# ---- Grading charts -------------------------------------------------------------------------
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_gr_bar_fig(wide: pd.DataFrame, title: str, show_all: bool, top_n: int, start: pd.Timestamp,
+                  end: pd.Timestamp, height: int = 340) -> go.Figure:
+    w = wide[(wide.index >= start) & (wide.index <= end)]
+    order = [o for o in w.sum().sort_values(ascending=False).index if w[o].sum() > 0]
+    colors = kc_gr_colors(list(wide.columns))
+    shown, minors = (order, []) if show_all else (order[:top_n], order[top_n:])
+    fig = go.Figure()
+    for o in shown:
+        fig.add_trace(go.Bar(x=w.index, y=w[o], name=o, marker_color=colors[o],
+                             hovertemplate="%{y:,.0f}<extra>" + o + "</extra>"))
+    if minors:
+        fig.add_trace(go.Bar(x=w.index, y=w[minors].sum(axis=1), name="Other", marker_color=KC_GR_OTHER,
+                             hovertemplate="%{y:,.0f}<extra>Other</extra>"))
+    chart_layout(fig, title + ("" if show_all else f" (Top {top_n} + Other)"), height)
+    fig.update_layout(barmode="stack", bargap=0.15, yaxis=dict(title=None, tickformat=","))
+    return fig
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_gr_pending_fig(wide: pd.DataFrame, show_all: bool, top_n: int, start: pd.Timestamp,
+                      end: pd.Timestamp, height: int = 340) -> go.Figure:
+    w = wide[(wide.index >= start) & (wide.index <= end)]
+    order = [o for o in w.sum().sort_values(ascending=False).index if w[o].sum() > 0]
+    colors = kc_gr_colors(list(wide.columns))
+    shown, minors = (order, []) if show_all else (order[:top_n], order[top_n:])
+    fig = go.Figure()
+    for o in shown:
+        fig.add_trace(go.Scatter(x=w.index, y=w[o], mode="lines", name=o, stackgroup="one",
+                                 line=dict(width=0.6, color=colors[o]), fillcolor=colors[o],
+                                 hovertemplate="%{y:,.0f}<extra>" + o + "</extra>"))
+    if minors:
+        fig.add_trace(go.Scatter(x=w.index, y=w[minors].sum(axis=1), mode="lines", name="Other", stackgroup="one",
+                                 line=dict(width=0.6, color=KC_GR_OTHER), fillcolor=KC_GR_OTHER,
+                                 hovertemplate="%{y:,.0f}<extra>Other</extra>"))
+    return chart_layout(fig, "Pending Grading Queue (bags)" + ("" if show_all else f" (Top {top_n} + Other)"), height)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_gr_passrate_fig(passed: pd.DataFrame, failed: pd.DataFrame, origins: tuple, n: int,
+                       start: pd.Timestamp, end: pd.Timestamp, height: int = 340) -> go.Figure:
+    colors = kc_gr_colors(list(passed.columns))
+    fig = go.Figure()
+    series = [("Total", passed.sum(axis=1), failed.sum(axis=1), NAVY)]
+    series += [(o, passed[o], failed[o], colors.get(o, GREY)) for o in origins if o in passed.columns]
+    for name, p, f, color in series:
+        ps, fs = p.rolling(n, min_periods=max(5, n // 4)).sum(), f.rolling(n, min_periods=max(5, n // 4)).sum()
+        rate = (ps / (ps + fs).replace(0, np.nan) * 100)
+        rate = rate[(rate.index >= start) & (rate.index <= end)]
+        fig.add_trace(go.Scatter(x=rate.index, y=rate, mode="lines", name=name,
+                                 line=dict(color=color, width=3 if name == "Total" else 1.8),
+                                 hovertemplate="%{y:.1f}%<extra>" + name + "</extra>"))
+    chart_layout(fig, f"Pass Rate, rolling {n} reported days (Passed / (Passed + Failed))", height)
+    fig.update_layout(yaxis=dict(ticksuffix="%", range=[0, 102]))
+    return fig
+
+
+def kc_cum_lines_fig(s: pd.Series, title: str, m: int, last: pd.Timestamp, n_years: int = 3,
+                     height: int = 320) -> go.Figure:
+    """Cumulative sum of a daily flow through the crop year (resets on the 1st of month m), one line
+    per crop year for the latest `n_years` (no bands). Years that began long before the data are skipped."""
+    fig = go.Figure()
+    first = s.index.min()
+    first_cy = first.year if first.month >= m else first.year - 1
+    start0 = pd.Timestamp(year=first_cy, month=m, day=1)
+    if (first - start0).days > 45:
+        first_cy += 1
+        start0 = pd.Timestamp(year=first_cy, month=m, day=1)
+    idx = pd.date_range(start0, last)
+    daily = s.reindex(idx, fill_value=0)
+    cy = np.where(idx.month >= m, idx.year, idx.year - 1)
+    cum = daily.groupby(cy).cumsum()
+    starts = pd.to_datetime([f"{y}-{m:02d}-01" for y in cy])
+    w = pd.DataFrame({"v": cum.values.astype(float), "x": (idx - starts).days + 1, "yr": cy}, index=idx)
+    w = w[w["x"] <= 365]
+    yrs = sorted(w["yr"].unique())[-n_years:]
+    pal = KC_GR_CY_COLORS[-len(yrs):]
+    for yr, color in zip(yrs, pal):
+        gg = w[w["yr"] == yr].sort_values("x")
+        lbl = crop_label(int(yr), m)
+        fig.add_trace(go.Scatter(x=gg["x"], y=gg["v"], mode="lines", name=lbl,
+                                 line=dict(color=color, width=3 if color == NAVY else 2),
+                                 hovertemplate="%{y:,.0f}<extra>" + lbl + "</extra>"))
+        fig.add_trace(go.Scatter(x=[gg["x"].iloc[-1]], y=[gg["v"].iloc[-1]], mode="markers+text", showlegend=False,
+                                 marker=dict(color=color, size=6), text=[f"{gg['v'].iloc[-1]:,.0f}"],
+                                 textposition="middle right", textfont=dict(size=10, color=color), hoverinfo="skip"))
+    order = [(m - 1 + i) % 12 for i in range(12)]
+    offs = np.concatenate([[0], np.cumsum([MONTH_DAYS[k] for k in order])])[:12] + 1
+    chart_layout(fig, title, height)
+    fig.update_layout(xaxis=dict(tickmode="array", tickvals=list(offs[::2]),
+                                 ticktext=[MONTH_ABBR[order[i]] for i in range(0, 12, 2)], range=[1, 380]),
+                      legend=dict(font=dict(size=10)))
+    return fig
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_cum_lines_cached(s: pd.Series, title: str, m: int, last: pd.Timestamp) -> go.Figure:
+    return kc_cum_lines_fig(s, title, m, last)
+
+
+# ---- Certs & Grading (usage) ----------------------------------------------------------------
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_cg_daily(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame) -> pd.DataFrame:
+    """Same-day Usage = Bags Passed - change in total certs, on every day we hold a grading file
+    for AND ICE published certs. Usage is the certified stock that left the pool that day."""
+    days = pd.DatetimeIndex(days)
+    passed = kc_gr_wide(g, pd.Series(days), "Passed").sum(axis=1)
+    tot = kc.set_index("Date")["KC-TOT-TOT"].astype(float).dropna()
+    chg = tot.diff()
+    idx = days[days.isin(chg.dropna().index)]
+    df = pd.DataFrame({"Passed": passed.reindex(idx), "Change": chg.reindex(idx), "Level": tot.reindex(idx)})
+    df["Usage"] = df["Passed"] - df["Change"]
+    return df
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_origin_certs(kc: pd.DataFrame) -> pd.DataFrame:
+    """Certs per origin by name. LSEG has no Kenya RIC, so Kenya is the residual of the total."""
+    cols = {f"KC-{c}-TOT": n for c, n in KC_ORIGIN_NAMES.items() if f"KC-{c}-TOT" in kc.columns}
+    o = kc.set_index("Date")[list(cols)].astype(float).rename(columns=cols).ffill(limit=5)
+    tot = kc.set_index("Date")["KC-TOT-TOT"].astype(float)
+    o["Kenya"] = (tot - o.sum(axis=1)).clip(lower=0)
+    return o
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_cg_monthly(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame) -> pd.DataFrame:
+    days = pd.DatetimeIndex(days)
+    d = kc_cg_daily(g, pd.Series(days), kc)
+    tot = kc.set_index("Date")["KC-TOT-TOT"].astype(float).dropna()
+    per = d.index.to_period("M")
+    m = d.groupby(per).agg(Passed=("Passed", "sum"), Change=("Change", "sum"), Usage=("Usage", "sum"), Days=("Passed", "size"))
+    m["Level"] = tot.groupby(tot.index.to_period("M")).last().reindex(m.index)
+    m["Avg"] = tot.groupby(tot.index.to_period("M")).mean().reindex(m.index)
+    m["Cal"] = tot[tot.index >= d.index.min()].groupby(tot[tot.index >= d.index.min()].index.to_period("M")).size().reindex(m.index)
+    m["UsagePct"] = m["Usage"] / m["Avg"] * 100
+    return m
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_cg_monthly_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, height: str = "60vh") -> str:
+    days = pd.DatetimeIndex(days)
+    p = kc_gr_wide(g, pd.Series(days), "Passed")
+    d = kc_cg_daily(g, pd.Series(days), kc)
+    p = p.reindex(d.index)
+    lots = p.groupby(p.index.to_period("M")).sum()
+    origins = [o for o in lots.columns if lots[o].sum() > 0]
+    m = kc_cg_monthly(g, pd.Series(days), kc)
+    mx, psc = max(float(lots[origins].max().max()), 1.0), max(float(m["Passed"].max()), 1.0)
+    csc, usc = max(float(m["Change"].abs().max()), 1.0), max(float(m["Usage"].abs().max()), 1.0)
+    pcs = max(float(m["UsagePct"].abs().max()), 1.0)
+    out = ["<div class='mt' style='margin-bottom:4px'>Bags Passed by month and KC Certified Stocks (bags). Usage is Passed minus the "
+           "change in certs, same day. Usage % is Usage over that month's average certs level. Days = grading days held / certs days.</div>",
+           "<div class='rwrap' style='height:", height, "'><table class='rpt'><thead><tr class='h1'>",
+           f"<th class='dt' rowspan='2'>Month</th><th colspan='{len(origins) + 1}'>Bags Passed by Origin</th>",
+           "<th colspan='5' class='sep certs-hdr'>KC Certs</th></tr><tr class='h2'>"]
+    out += [f"<th>{o}</th>" for o in origins]
+    out += ["<th>Total</th><th class='sep certs-hdr'>Level</th><th class='certs-hdr'>Change</th>",
+            "<th class='certs-hdr'>Usage</th><th class='certs-hdr'>Usage %</th><th class='certs-hdr'>Days</th></tr></thead><tbody>"]
+    for pr in m.index[::-1]:
+        full = m.loc[pr, "Days"] >= m.loc[pr, "Cal"]
+        dcell = (f"<td>{int(m.loc[pr, 'Days'])} / {int(m.loc[pr, 'Cal'])}</td>" if full else
+                 f"<td style='color:{AMBER};font-weight:600'>{int(m.loc[pr, 'Days'])} / {int(m.loc[pr, 'Cal'])}</td>")
+        out.append(f"<tr><td class='d'>{pr.strftime('%b %Y')}</td>"
+                   + "".join(_heat_td(lots.loc[pr, o], mx) for o in origins) + _bar_td(m.loc[pr, "Passed"], psc)
+                   + f"<td class='tot sep'>{_fmt_i(m.loc[pr, 'Level'])}</td>"
+                   + _delta_td(m.loc[pr, "Change"], csc) + _delta_td(m.loc[pr, "Usage"], usc)
+                   + _delta_td(m.loc[pr, "UsagePct"], pcs, pct=True) + dcell + "</tr>")
+    return "".join(out) + "</tbody></table></div>"
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_cg_daily_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, height: str = "60vh") -> str:
+    days = pd.DatetimeIndex(days)
+    p = kc_gr_wide(g, pd.Series(days), "Passed")
+    d = kc_cg_daily(g, pd.Series(days), kc)
+    origins = [o for o in p.columns if p[o].sum() > 0]
+    mx, psc = max(float(p[origins].max().max()), 1.0), max(float(p.sum(axis=1).max()), 1.0)
+    csc, usc = max(float(d["Change"].abs().max()), 1.0), max(float(d["Usage"].abs().max()), 1.0)
+    out = ["<div class='mt' style='margin-bottom:4px'>Bags Passed by day and KC Certified Stocks change (bags), same day</div>",
+           "<div class='rwrap' style='height:", height, "'><table class='rpt'><thead><tr class='h1'>",
+           f"<th class='dt' rowspan='2'>Date</th><th colspan='{len(origins) + 1}'>Bags Passed by Origin</th>",
+           "<th colspan='2' class='sep certs-hdr'>KC Certs</th></tr><tr class='h2'>"]
+    out += [f"<th>{o}</th>" for o in origins]
+    out += ["<th>Total</th><th class='sep certs-hdr'>Change</th><th class='certs-hdr'>Usage</th></tr></thead><tbody>"]
+    for dt in days[::-1]:
+        has = dt in d.index
+        out.append(f"<tr><td class='d'>{dt.strftime('%d-%b-%y')}</td>"
+                   + "".join(_heat_td(p.loc[dt, o], mx) for o in origins) + _bar_td(p.loc[dt].sum(), psc)
+                   + (_delta_td(d.loc[dt, "Change"], csc, "cb sep") + _delta_td(d.loc[dt, "Usage"], usc)
+                      if has else "<td class='na sep'></td><td class='na'></td>") + "</tr>")
+    return "".join(out) + "</tbody></table></div>"
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_usage_by_origin_fig(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, show_all: bool,
+                           top_n: int = 5, height: int = 380) -> go.Figure:
+    """Monthly Usage per origin: each origin's Passed minus the change in that origin's own certs."""
+    days = pd.DatetimeIndex(days)
+    p = kc_gr_wide(g, pd.Series(days), "Passed")
+    oc = kc_origin_certs(kc)
+    d = kc_cg_daily(g, pd.Series(days), kc)
+    idx = d.index
+    chg = oc.diff().reindex(idx)
+    pas = p.reindex(idx).reindex(columns=chg.columns, fill_value=0)
+    use = (pas - chg).groupby(idx.to_period("M")).sum()
+    order = list(use.abs().sum().sort_values(ascending=False).index)
+    colors = kc_gr_colors(order)
+    shown, minors = (order, []) if show_all else (order[:top_n], order[top_n:])
+    xs = [str(x) for x in use.index]
+    fig = go.Figure()
+    for o in shown:
+        fig.add_trace(go.Bar(x=xs, y=use[o], name=o, marker_color=colors[o], hovertemplate="%{y:+,.0f}<extra>" + o + "</extra>"))
+    if minors:
+        fig.add_trace(go.Bar(x=xs, y=use[minors].sum(axis=1), name="Other", marker_color=KC_GR_OTHER,
+                             hovertemplate="%{y:+,.0f}<extra>Other</extra>"))
+    chart_layout(fig, "Monthly Usage by Origin (bags)" + ("" if show_all else f" (Top {top_n} + Other)"), height)
+    fig.update_layout(barmode="relative", bargap=0.25, xaxis=dict(type="category", tickangle=-90, tickfont=dict(size=9)),
+                      yaxis=dict(tickformat="+,"))
+    return fig
+
+
 with st.sidebar:
     st.markdown("<div class='sb-title'>Daily Miner</div>", unsafe_allow_html=True)
     st.markdown("<div class='sb-label'>Commodity</div>", unsafe_allow_html=True)
@@ -1618,23 +2076,210 @@ if commodity == "Coffee":
                                     width="stretch", config={"displayModeBar": False})
 
         elif ar_section == "Grading":
+            g, gdays = load_kc_grading()
+            g_min, g_max = gdays.min(), gdays.max()
             with st.container(key="rc_view_box"):
-                st.radio("View", ["Table", "Visuals", "Seasonality"], horizontal=True,
-                        label_visibility="collapsed", key="ar_grading_view")
+                ar_g_view = st.radio("View", ["Table", "Visuals", "Seasonality"], horizontal=True,
+                                     label_visibility="collapsed", key="ar_grading_view")
             st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
-            st.markdown("<div class='card-desc'>Coming next.</div>", unsafe_allow_html=True)
+            st.markdown(kc_gr_gap_note(kc, gdays), unsafe_allow_html=True)
+            gcfg = {"displayModeBar": False}
+
+            if ar_g_view == "Table":
+                tc1, tc2, _ = st.columns([1, 1, 4])
+                with tc1:
+                    st.markdown("<div class='sb-label' style='margin:0 0 2px'>Period</div>", unsafe_allow_html=True)
+                    tbl_period = st.selectbox("Period", ["Last 1M", "Last 3M", "Last 6M", "Last 1Y", "All"], index=1,
+                                              label_visibility="collapsed", key="arg_tbl_period")
+                with tc2:
+                    st.markdown("<div class='sb-label' style='margin:0 0 2px'>Port split shows</div>", unsafe_allow_html=True)
+                    port_tag = st.selectbox("Port split", ["Passed", "Failed", "Pending"],
+                                            label_visibility="collapsed", key="arg_port_tag")
+                ts_, te_ = kc_range(tbl_period, g_min, g_max)
+                port_note = ("stock at " + te_.strftime("%d %b %Y")) if port_tag == "Pending" else "same period"
+                st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+                st.markdown(
+                    "<div style='display:flex; gap:28px; align-items:flex-start; flex-wrap:wrap;'>"
+                    f"<div><div class='mt'>Grading by Origin ({ts_.strftime('%d %b %Y')} &rarr; {te_.strftime('%d %b %Y')}, bags)</div>"
+                    f"{kc_gr_summary_html(g, gdays, ts_, te_)}</div>"
+                    f"<div><div class='mt'>{port_tag} by Origin and Port ({port_note}, bags)</div>"
+                    f"{kc_gr_port_html(g, gdays, port_tag, ts_, te_)}</div>"
+                    "</div>", unsafe_allow_html=True)
+                st.markdown("<div style='height:30px'></div>", unsafe_allow_html=True)
+                mc1, _ = st.columns([1, 5])
+                with mc1:
+                    st.markdown("<div class='sb-label' style='margin:0 0 2px'>Monthly matrix shows</div>", unsafe_allow_html=True)
+                    month_tag = st.selectbox("Monthly matrix", ["Passed", "Failed"],
+                                             label_visibility="collapsed", key="arg_month_tag")
+                st.markdown(kc_gr_monthly_html(g, gdays, month_tag), unsafe_allow_html=True)
+                st.markdown("<div style='height:30px'></div>", unsafe_allow_html=True)
+                st.markdown("<div class='mt'>Daily Grading (bags)</div>", unsafe_allow_html=True)
+                st.markdown(kc_gr_daily_html(g, gdays), unsafe_allow_html=True)
+
+            elif ar_g_view == "Visuals":
+                v1, v2, _ = st.columns([2.4, 1.8, 3])
+                with v1:
+                    g_span = st.radio("Grading history", ["3M", "6M", "1Y", "All", "Custom"], index=2, horizontal=True,
+                                      label_visibility="collapsed", key="arg_span")
+                with v2:
+                    g_all = st.radio("Origins", ["Top 5 + Other", "Show all origins"], horizontal=True,
+                                     label_visibility="collapsed", key="arg_origin_all")
+                if g_span == "Custom":
+                    gc1, gc2, _ = st.columns([1, 1, 4])
+                    with gc1:
+                        g_from = st.date_input("Start date", value=(g_max - pd.DateOffset(months=12)).date(),
+                                               min_value=g_min.date(), max_value=g_max.date(), key="arg_from")
+                    with gc2:
+                        g_to = st.date_input("End date", value=g_max.date(), min_value=g_min.date(),
+                                             max_value=g_max.date(), key="arg_to")
+                    gs_, ge_ = pd.Timestamp(g_from), pd.Timestamp(g_to)
+                elif g_span == "All":
+                    gs_, ge_ = g_min, g_max
+                else:
+                    gs_, ge_ = g_max - pd.DateOffset(months={"3M": 3, "6M": 6, "1Y": 12}[g_span]), g_max
+                show_all_o = g_all == "Show all origins"
+                p_w, f_w = kc_gr_wide(g, gdays, "Passed"), kc_gr_wide(g, gdays, "Failed")
+                st.plotly_chart(kc_gr_bar_fig(p_w, "Daily Bags Passed | Per Origin", show_all_o, 5, gs_, ge_),
+                                width="stretch", config=gcfg)
+                st.plotly_chart(kc_gr_bar_fig(f_w, "Daily Bags Failed | Per Origin", show_all_o, 5, gs_, ge_),
+                                width="stretch", config=gcfg)
+
+                cm1, _ = st.columns([1, 5])
+                with cm1:
+                    st.markdown("<div class='sb-label' style='margin:0 0 2px'>Cumulative starts</div>", unsafe_allow_html=True)
+                    vcm = MONTH_ABBR.index(st.selectbox("Cumulative starts", MONTH_ABBR, index=6,
+                                                        label_visibility="collapsed", key="arg_crop_m")) + 1
+                cA, cB = st.columns(2)
+                with cA:
+                    st.plotly_chart(kc_cum_lines_cached(p_w.sum(axis=1), "Cumulative Bags Passed", vcm, g_max),
+                                    width="stretch", config=gcfg)
+                with cB:
+                    st.plotly_chart(kc_cum_lines_cached(f_w.sum(axis=1), "Cumulative Bags Failed", vcm, g_max),
+                                    width="stretch", config=gcfg)
+
+                st.plotly_chart(kc_gr_pending_fig(kc_gr_wide(g, gdays, "Pending"), show_all_o, 5, gs_, ge_),
+                                width="stretch", config=gcfg)
+
+                rc1, rc2, _ = st.columns([1.2, 3, 2])
+                with rc1:
+                    st.markdown("<div class='sb-label' style='margin:0 0 2px'>Pass rate window (days)</div>", unsafe_allow_html=True)
+                    roll_n = st.radio("Window", [20, 60, 120], index=1, horizontal=True,
+                                      label_visibility="collapsed", key="arg_roll_n")
+                with rc2:
+                    st.markdown("<div class='sb-label' style='margin:0 0 2px'>Origins on the pass rate chart</div>", unsafe_allow_html=True)
+                    roll_o = st.multiselect("Pass rate origins", list(p_w.columns), default=list(p_w.columns[:2]),
+                                            label_visibility="collapsed", key="arg_roll_origins")
+                st.plotly_chart(kc_gr_passrate_fig(p_w, f_w, tuple(roll_o), int(roll_n), gs_, ge_),
+                                width="stretch", config=gcfg)
+
+            else:
+                p_w, f_w = kc_gr_wide(g, gdays, "Passed"), kc_gr_wide(g, gdays, "Failed")
+                top3 = list(p_w.columns[:3])
+                sc1, sc2, _ = st.columns([1, 1.4, 4])
+                with sc1:
+                    st.markdown("<div class='sb-label' style='margin:0 0 2px'>Crop year starts</div>", unsafe_allow_html=True)
+                    scm = MONTH_ABBR.index(st.selectbox("Crop year starts", MONTH_ABBR, index=6,
+                                                        label_visibility="collapsed", key="ars_crop_m")) + 1
+                with sc2:
+                    st.markdown("<div class='sb-label' style='margin:0 0 2px'>Fourth chart origin</div>", unsafe_allow_html=True)
+                    fourth = st.selectbox("Fourth chart", ["Total"] + list(p_w.columns[3:]), index=0,
+                                          label_visibility="collapsed", key="ars_fourth")
+                picks = top3 + [fourth]
+                for label, w in (("Passed", p_w), ("Failed", f_w)):
+                    q = st.columns(4)
+                    for col_, o in zip(q, picks):
+                        with col_:
+                            s_ = w.sum(axis=1) if o == "Total" else w[o]
+                            st.plotly_chart(kc_cum_lines_cached(s_, f"{o} | cumulative {label.lower()}", scm, g_max),
+                                            width="stretch", config=gcfg)
+                st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+                mt1, mt2, _ = st.columns([1, 1.6, 4])
+                with mt1:
+                    st.markdown("<div class='sb-label' style='margin:0 0 2px'>Matrix shows</div>", unsafe_allow_html=True)
+                    m_tag = st.selectbox("Matrix shows", ["Passed", "Failed"], label_visibility="collapsed", key="ars_matrix_tag")
+                m_w = p_w if m_tag == "Passed" else f_w
+                with mt2:
+                    st.markdown("<div class='sb-label' style='margin:0 0 2px'>Right-hand origin</div>", unsafe_allow_html=True)
+                    m_or = st.selectbox("Right-hand origin", list(m_w.columns), label_visibility="collapsed", key="ars_matrix_origin")
+                mA, mB = st.columns(2)
+                with mA:
+                    st.markdown(f"<div class='mt side'>Monthly Bags {m_tag}: Total</div>", unsafe_allow_html=True)
+                    st.markdown(kc_monthly_matrix_html(kc_monthly_sum(m_w.sum(axis=1)), scm), unsafe_allow_html=True)
+                with mB:
+                    st.markdown(f"<div class='mt side'>Monthly Bags {m_tag}: {m_or}</div>", unsafe_allow_html=True)
+                    st.markdown(kc_monthly_matrix_html(kc_monthly_sum(m_w[m_or]), scm), unsafe_allow_html=True)
+                st.markdown("<div style='height:36px'></div>", unsafe_allow_html=True)
+                _gl, gd, _gr = st.columns([1, 2, 1])
+                with gd:
+                    gd_span = st.radio("Distribution window", ["Last 1Y", "All"], index=1, horizontal=True,
+                                       label_visibility="collapsed", key="ars_dist_span")
+                    per_day = p_w.sum(axis=1)
+                    if gd_span == "Last 1Y":
+                        per_day = per_day[per_day.index >= per_day.index.max() - pd.DateOffset(years=1)]
+                    st.plotly_chart(distribution_fig(per_day, "Bags Passed per Day: Total", "lvl"),
+                                    width="stretch", config=gcfg)
 
         else:
+            g, gdays = load_kc_grading()
             with st.container(key="rc_view_box"):
                 ar_cg_view = st.radio("View", ["Table", "Visuals", "Seasonality"], horizontal=True,
                                       label_visibility="collapsed", key="ar_cg_view")
             st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+            st.markdown(kc_gr_gap_note(kc, gdays), unsafe_allow_html=True)
+            ucfg = {"displayModeBar": False}
 
             if ar_cg_view == "Table":
+                st.markdown(kc_cg_monthly_html(g, gdays, kc), unsafe_allow_html=True)
+                st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                st.markdown(kc_cg_daily_html(g, gdays, kc), unsafe_allow_html=True)
+                st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
                 st.markdown("<div class='mt'>KC Grading Flow (bags)</div>", unsafe_allow_html=True)
                 st.markdown(kc_grading_flow_html(kc), unsafe_allow_html=True)
+
+            elif ar_cg_view == "Visuals":
+                du = kc_cg_daily(g, gdays, kc)
+                ucm_col, uo_col, _ = st.columns([1, 2, 3])
+                with ucm_col:
+                    st.markdown("<div class='sb-label' style='margin:0 0 2px'>Cumulative starts</div>", unsafe_allow_html=True)
+                    ucm = MONTH_ABBR.index(st.selectbox("Cumulative starts", MONTH_ABBR, index=6,
+                                                        label_visibility="collapsed", key="acg_crop_m")) + 1
+                with uo_col:
+                    st.markdown("<div class='sb-label' style='margin:0 0 2px'>Usage by origin</div>", unsafe_allow_html=True)
+                    u_all = st.radio("Usage origins", ["Top 5 + Other", "Show all origins"], horizontal=True,
+                                     label_visibility="collapsed", key="acg_origin_all")
+                u1, u2 = st.columns(2)
+                with u1:
+                    st.plotly_chart(kc_cum_lines_cached(du["Usage"], "Cumulative Usage (Passed - certs change)", ucm, gdays.max()),
+                                    width="stretch", config=ucfg)
+                with u2:
+                    st.plotly_chart(kc_cum_lines_cached(kc_gr_wide(g, gdays, "Passed").sum(axis=1), "Cumulative Total Passed",
+                                                        ucm, gdays.max()), width="stretch", config=ucfg)
+                st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+                st.plotly_chart(kc_usage_by_origin_fig(g, gdays, kc, u_all == "Show all origins"),
+                                width="stretch", config=ucfg)
+
             else:
-                st.markdown("<div class='card-desc'>Coming next.</div>", unsafe_allow_html=True)
+                du = kc_cg_daily(g, gdays, kc)
+                mm = kc_cg_monthly(g, gdays, kc)
+                sm_col, _ = st.columns([1, 5])
+                with sm_col:
+                    st.markdown("<div class='sb-label' style='margin:0 0 2px'>Crop year starts</div>", unsafe_allow_html=True)
+                    scm2 = MONTH_ABBR.index(st.selectbox("Crop year starts", MONTH_ABBR, index=6,
+                                                         label_visibility="collapsed", key="acgs_crop_m")) + 1
+                st.markdown(
+                    "<div style='display:flex; gap:28px; align-items:flex-start; flex-wrap:wrap;'>"
+                    f"<div><div class='mt'>Monthly Usage (bags)</div>{kc_monthly_matrix_html(mm['Usage'], scm2, signed=True)}</div>"
+                    f"<div><div class='mt'>Monthly Usage % of average certs</div>{kc_monthly_matrix_html(mm['UsagePct'], scm2, pct=True)}</div>"
+                    "</div>", unsafe_allow_html=True)
+                st.markdown("<div style='height:36px'></div>", unsafe_allow_html=True)
+                _ul, ud, _ur = st.columns([1, 2, 1])
+                with ud:
+                    ud_span = st.radio("Usage distribution window", ["Last 1Y", "All"], index=1, horizontal=True,
+                                       label_visibility="collapsed", key="acgs_dist_span")
+                    us = du["Usage"]
+                    if ud_span == "Last 1Y":
+                        us = us[us.index >= us.index.max() - pd.DateOffset(years=1)]
+                    st.plotly_chart(distribution_fig(us, "Daily Usage Distribution", "chg"), width="stretch", config=ucfg)
 
     else:
         # A plain st.radio (not st.tabs) is used for these two levels of navigation: st.tabs

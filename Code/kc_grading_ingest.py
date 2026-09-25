@@ -30,6 +30,8 @@ DAILY_DIR = DB / "Manual Inputs" / "KC"
 OUT = DB / "Main" / "KC" / "kc_grading.parquet"
 DAYS = DB / "Main" / "KC" / "kc_grading_days.parquet"
 LOG = DB / "Logs" / "KC" / "kc_grading_log.csv"
+MISSING = DB / "Logs" / "KC" / "kc_grading_missing_days.csv"
+CERTS = DB / "Main" / "KC" / "kc_certs.parquet"
 
 PORT_ALIASES = {
     "ANT": "Antwerp", "ANTWERP": "Antwerp",
@@ -216,7 +218,22 @@ def save(db, days):
         old = pd.read_csv(LOG) if LOG.exists() else pd.DataFrame(columns=new.columns)
         pd.concat([old, new], ignore_index=True).to_csv(LOG, index=False)
         _log.clear()
+    write_missing_days(days)
     print(f"Saved {len(db):,} rows, {db['Date'].nunique()} dates ({db['Date'].min().date()} -> {db['Date'].max().date()})")
+
+
+def write_missing_days(days):
+    """Certs report days (LSEG calendar) that have no grading file yet: download these from ICE and drop them in Manual Inputs/KC."""
+    if not CERTS.exists():
+        return
+    c = pd.read_parquet(CERTS, columns=["Date", "KC-TOT-TOT"])
+    cal = pd.to_datetime(c.dropna(subset=["KC-TOT-TOT"])["Date"])
+    cal = cal[cal >= days["Date"].min()]
+    miss = sorted(set(cal) - set(pd.to_datetime(days["Date"])))
+    MISSING.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({"Date": [d.date() for d in miss],
+                  "File to download": [f"coffee_cert_stock_{d:%Y%m%d}.xls" for d in miss]}).to_csv(MISSING, index=False)
+    print(f"{len(miss)} certs days have no grading file yet -> {MISSING.name}")
 
 
 # ---------------------------------------------------------------- history
@@ -269,6 +286,10 @@ def clean_history(h):
             log(date.date(), "history", "CONFLICT_DROPPED", f"{tag}/{origin}/{port}: {sorted(g['Bags'].unique())} unresolved, key removed")
     h = h.drop(index=drop_idx)
     h = h.drop_duplicates(key)
+    wk = h["Date"].dt.dayofweek >= 5
+    for d in sorted(h.loc[wk, "Date"].unique()):
+        log(pd.Timestamp(d).date(), "history", "DROP_WEEKEND", "ICE does not report at weekends, row(s) removed")
+    h = h[~wk]
     print(f"History: {n0:,} raw rows -> {len(h):,} clean rows")
     return h[key + ["Bags"]].assign(Bags=lambda x: x["Bags"].astype("int64")), tot
 

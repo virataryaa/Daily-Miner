@@ -143,3 +143,10 @@ This folder has no `.git` of its own. Running git here resolves to the git repo 
 | Database/Logs/{KC,RC,CC,QC} | Cleaning, quarantine and reconciliation logs |
 
 KC grading: drop the day's ICE xls into Manual Inputs/KC and run Code/kc_grading_ingest.py. It parses by section title, reconciles every block against Total in Bags, and a daily file overrides history for its date.
+
+## Arabica grading and usage
+
+- Source: ICE daily certified-stock xls (Passed, Failed, Pending by origin and port), history 2023-07 onward. Certs come from LSEG and match the ICE report exactly on every overlapping day.
+- Usage is same-day: Usage = Bags Passed - change in total certs (KC-TOT-TOT). No lag, unlike Robusta.
+- Cumulative charts show the latest 3 crop years as lines (no bands); every crop-year slicer defaults to July.
+- Certs days with no grading file are listed in Database/Logs/KC/kc_grading_missing_days.csv. Those days are unknown, not zero, so cumulative and monthly totals run low across them. The dashboard shows a note, and the Days column in the monthly table turns amber.
