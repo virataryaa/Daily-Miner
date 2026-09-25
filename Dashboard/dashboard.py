@@ -2075,6 +2075,33 @@ def kc_cg_usage_origin(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame) -> pd
     return p - oc.diff().reindex(d.index)
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_fill_from_ice(kc: pd.DataFrame, g: pd.DataFrame) -> pd.DataFrame:
+    """LSEG occasionally has no certs row for a day ICE did report (e.g. 10-Aug-2026). Add such days from the
+    ICE certified-stock file itself (identical to LSEG wherever both exist) so usage and certs change stay continuous."""
+    ice = g[g["Tag"] == "Certs"]
+    missing = sorted(set(ice["Date"].unique()) - set(kc["Date"]))
+    missing = [d for d in missing if d >= kc["Date"].min() and pd.Timestamp(d).dayofweek < 5]
+    if not missing:
+        return kc
+    name_to_code = {n: c for c, n in KC_ORIGIN_NAMES.items()}
+    rows = []
+    for d in missing:
+        x = ice[ice["Date"] == d]
+        row = {"Date": d, "KC-TOT-TOT": float(x["Bags"].sum())}
+        for o, v in x.groupby("Origin")["Bags"].sum().items():
+            if o in name_to_code:
+                row[f"KC-{name_to_code[o]}-TOT"] = float(v)
+        for pname, v in x.groupby("Port")["Bags"].sum().items():
+            if pname in KC_PORT_CODE:
+                row[f"KC-TOT-{KC_PORT_CODE[pname]}"] = float(v)
+        for (o, pname), v in x.groupby(["Origin", "Port"])["Bags"].sum().items():
+            if o in name_to_code and pname in KC_PORT_CODE:
+                row[f"KC-{name_to_code[o]}-{KC_PORT_CODE[pname]}"] = float(v)
+        rows.append(row)
+    return pd.concat([kc, pd.DataFrame(rows)], ignore_index=True).sort_values("Date").reset_index(drop=True)
+
+
 KC_PORT_CODE = {"Antwerp": "AN", "Barcelona": "BA", "Ham/Bre": "HA", "Houston": "HO", "Miami": "MI",
                 "New Orleans": "NO", "New York": "NY"}
 
@@ -2547,6 +2574,7 @@ if commodity == "Coffee":
 
         elif ar_section == "Usage":
             g, gdays = load_kc_grading()
+            kc = kc_fill_from_ice(kc, g)
             with st.container(key="rc_view_box"):
                 ar_cg_view = st.radio("View", ["Usage Per Origin", "Usage Per Port", "Cumulative"], horizontal=True,
                                       label_visibility="collapsed", key="ar_cg_view")
@@ -2619,6 +2647,7 @@ if commodity == "Coffee":
 
         else:
             g, gdays = load_kc_grading()
+            kc = kc_fill_from_ice(kc, g)
             cv1, cv2, _ = st.columns([1.2, 2, 3])
             with cv1:
                 st.markdown("<div class='sb-label' style='margin:0 0 2px'>Split by</div>", unsafe_allow_html=True)
