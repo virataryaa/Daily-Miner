@@ -1840,32 +1840,6 @@ def kc_gr_pf_bars_fig(mf: pd.DataFrame, title: str, proportion: bool = False, he
     return fig
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def kc_gr_pending_donut_fig(g: pd.DataFrame, days: pd.Series, by: str, height: int = 360) -> go.Figure:
-    """Donut of the latest Pending stock split by Origin or by Port."""
-    days = pd.DatetimeIndex(days)
-    last = days.max()
-    v = g[(g["Tag"] == "Pending") & (g["Date"] == last)].groupby(by)["Bags"].sum()
-    v = v[v > 0].sort_values(ascending=False)
-    if by == "Origin":
-        colors = kc_gr_colors(list(v.index))
-        labels = list(v.index)
-    else:
-        colors = KC_GR_PORT_COLORS
-        labels = [KC_GR_PORT_SHORT.get(p, p) for p in v.index]
-    fig = go.Figure(go.Pie(
-        labels=labels, values=v.values, hole=0.62, sort=False, direction="clockwise",
-        marker=dict(colors=[colors.get(k, GREY) for k in v.index], line=dict(color="#fafafa", width=3)),
-        textinfo="label+percent", textposition="outside", textfont=dict(size=12, color="#1a1a2e"),
-        hovertemplate="%{label}: %{value:,.0f} (%{percent})<extra></extra>", showlegend=False))
-    chart_layout(fig, f"Pending by {by} ({last.strftime('%d %b %Y')})", height)
-    fig.update_layout(
-        margin=dict(t=44, b=24, l=50, r=50),
-        annotations=[dict(text=f"<b>{v.sum():,.0f}</b><br><span style='font-size:11px;color:#7a86a8'>bags pending</span>",
-                          x=0.5, y=0.5, showarrow=False, font=dict(size=22, color=NAVY))])
-    return fig
-
-
 KC_PORT_COUNTRY = {"AN": "Belgium", "BA": "Spain", "HA": "Germany", "HO": "USA", "MI": "USA", "NO": "USA", "NY": "USA"}
 KC_COUNTRY_COLORS = {"Belgium": "#4a63a8", "Spain": "#4a63a8", "Germany": "#4a63a8", "USA": TEAL}  # header bands: Europe slate blue, USA teal
 KC_COUNTRY_CHART_COLORS = {"Belgium": NAVY, "Spain": "#6b7fb5", "Germany": "#8fa3d1", "USA": TEAL}
@@ -2450,11 +2424,6 @@ if commodity == "Coffee":
                                         width="stretch", config=gcfg, key=f"arg_cum_p_{p_}")
 
             elif ar_g_view == "Pending":
-                dn1, dn2 = st.columns(2)
-                with dn1:
-                    st.plotly_chart(kc_gr_pending_donut_fig(g, gdays, "Origin"), width="stretch", config=gcfg)
-                with dn2:
-                    st.plotly_chart(kc_gr_pending_donut_fig(g, gdays, "Port"), width="stretch", config=gcfg)
 
                 pv1, pv2, _ = st.columns([1.6, 1.8, 3])
                 with pv1:
