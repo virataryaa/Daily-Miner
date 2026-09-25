@@ -1305,7 +1305,7 @@ def monthly_grading_certs_html(gr: pd.DataFrame, certs: pd.DataFrame, grade: str
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def daily_grading_certs_html(gr: pd.DataFrame, certs: pd.DataFrame, grade: str = "VG",
-                             height: str = "60vh", lag: int = 1) -> str:
+                             height: str = "60vh", lag: int = 1, nrows: int = 0) -> str:
     """Same idea as monthly_grading_certs_html, one row per calendar day instead of month: grading
     lots by origin only show up on days a panel actually ran, LRC certs change is day-over-day.
     Capped to grading's own range (from Jan 2022).
@@ -1379,7 +1379,7 @@ def daily_grading_certs_html(gr: pd.DataFrame, certs: pd.DataFrame, grade: str =
     head += [f"<th>{o}</th>" for o in origins] + ["<th>Total</th><th class='sep certs-hdr'>Change</th><th class='certs-hdr'>Usage</th></tr></thead><tbody>"]
 
     body = []
-    for d in days:
+    for d in (days[:nrows] if nrows else days):
         row = [f"<tr><td class='d'>{d.strftime('%d-%b-%y')}</td>"]
         row += [lcell(lots.loc[d, o] if d in lots.index else np.nan) for o in origins]
         row.append(totcell(lots_tot.get(d, 0), l_scale))
@@ -1466,7 +1466,7 @@ def _delta_td(v, sc, cls="cb", pct=False):
 
 # ---- Grading tables -------------------------------------------------------------------------
 @st.cache_data(ttl=3600, show_spinner=False)
-def kc_gr_daily_html(g: pd.DataFrame, days: pd.Series, height: str = "60vh") -> str:
+def kc_gr_daily_html(g: pd.DataFrame, days: pd.Series, height: str = "60vh", nrows: int = 0) -> str:
     """One row per reported day: Passed by origin (heat), Passed / Failed totals, Pass %, Pending stock."""
     days = pd.DatetimeIndex(days)
     p = kc_gr_wide(g, pd.Series(days), "Passed")
@@ -1483,7 +1483,7 @@ def kc_gr_daily_html(g: pd.DataFrame, days: pd.Series, height: str = "60vh") -> 
     out += [f"<th>{o}</th>" for o in origins]
     out += ["<th>Total</th><th class='sep'>Failed</th><th>Pass %</th><th>Pending</th><th>Passed + Failed</th></tr></thead><tbody>"]
     pt_sc, f_sc, pe_sc = max(float(pt.max()), 1.0), max(float(f.max()), 1.0), max(float(pend.max()), 1.0)
-    for d in days[::-1]:
+    for d in (days[::-1][:nrows] if nrows else days[::-1]):
         r = [f"<tr><td class='d'>{d.strftime('%d-%b-%y')}</td>"]
         r += [_heat_td(p.loc[d, o], mx) for o in origins]
         r.append(_bar_td(pt[d], pt_sc))
@@ -2068,7 +2068,7 @@ def kc_cg_monthly_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, show_
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def kc_cg_daily_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, show_all: bool = False,
-                     height: str = "72vh", with_rate: bool = False, with_queue: bool = False) -> str:
+                     height: str = "72vh", with_rate: bool = False, with_queue: bool = False, nrows: int = 0) -> str:
     days = pd.DatetimeIndex(days)
     p = kc_gr_wide(g, pd.Series(days), "Passed")
     f_full = kc_gr_wide(g, pd.Series(days), "Failed")
@@ -2089,7 +2089,7 @@ def kc_cg_daily_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, show_al
         qd = kc_queue_frame(g, pd.Series(days), kc)
         frd = _fresh_cols(kc_fresh_frame(g, pd.Series(days), "Origin"), cols)
         sc["fr"] = max(float(frd.drop(columns="Total").abs().max().max()), 1.0)
-    for dt in days[::-1]:
+    for dt in (days[::-1][:nrows] if nrows else days[::-1]):
         out.append(_cg_row(dt.strftime("%d-%b-%y"), pp.loc[dt], cc.loc[dt].fillna(0), use.loc[dt].fillna(0), cols, sc,
                            dt in d.index, rate.loc[dt] if with_rate else None, qd.loc[dt] if with_queue else None, with_queue,
                            frd.loc[dt] if with_queue else None))
@@ -2209,7 +2209,7 @@ def _cg_port_head(first_col: str, cols: list, with_rate: bool = False, with_queu
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def kc_cg_port_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, monthly: bool, height: str = "auto",
-                    with_rate: bool = False, with_queue: bool = False) -> str:
+                    with_rate: bool = False, with_queue: bool = False, nrows: int = 0) -> str:
     days = pd.DatetimeIndex(days)
     d = kc_cg_daily(g, pd.Series(days), kc)
     pas_all = kc_gr_wide(g, pd.Series(days), "Passed", by="Port").reindex(columns=KC_GR_PORTS, fill_value=0)
@@ -2226,7 +2226,7 @@ def kc_cg_port_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, monthly:
         first, title = "Month", "Monthly"
     else:
         pas, fl, f_tot, chg = pas_all[cols], fail_all[cols], fail_all.sum(axis=1), chg_all[cols].fillna(0)
-        rows = [(dt, dt.strftime("%d-%b-%y"), dt in d.index) for dt in days[::-1]]
+        rows = [(dt, dt.strftime("%d-%b-%y"), dt in d.index) for dt in (days[::-1][:nrows] if nrows else days[::-1])]
         first, title = "Date", "Daily"
     use = pas - chg
     rate = _rate_frame(pas, fl, f_tot) if with_rate else None
@@ -2335,7 +2335,7 @@ def rc_comp_frames(gr: pd.DataFrame, certs: pd.DataFrame, grade: str = "VG") -> 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def rc_comp_html(gr: pd.DataFrame, certs: pd.DataFrame, monthly: bool, show_all: bool = False,
-                 height: str = "72vh", grade: str = "VG") -> str:
+                 height: str = "72vh", grade: str = "VG", nrows: int = 0) -> str:
     f = rc_comp_frames(gr, certs, grade)
     idx = f["idx"]
     per = idx.to_period("M")
@@ -2349,13 +2349,18 @@ def rc_comp_html(gr: pd.DataFrame, certs: pd.DataFrame, monthly: bool, show_all:
     lots_o, ten_o = agg(f["lots_o"]), agg(f["ten_o"])
     lots_p, chg_p, use_p = agg(f["lots_p"]), agg(f["chg_p"]), agg(f["use_p"])
     chg_t, use_t = agg(f["chg_t"]), agg(f["use_t"])
-    level, price = agg(f["level"], "last"), agg(f["price"], "last")
-    price_chg = agg(f["price_chg"])
+    level = agg(f["level"], "last")
     rank = f["lots_p"].sum().sort_values(ascending=False)
     ranked = [p for p in rank.index if rank[p] > 0] + [p for p in f["ports"] if rank.get(p, 0) == 0
                                                        and f["chg_p"][p].abs().sum() > 0]
     shown = ranked if show_all else ranked[:5]
     rest = [p for p in f["ports"] if p not in shown]
+    # ports of one country sit next to each other under a single country band (biggest country first)
+    ctry = lambda p: PORT_COUNTRY.get(p, "Other")
+    c_lots = {}
+    for p in shown:
+        c_lots[ctry(p)] = c_lots.get(ctry(p), 0) + float(rank.get(p, 0))
+    shown = sorted(shown, key=lambda p: (-c_lots[ctry(p)], ctry(p), -float(rank.get(p, 0))))
 
     def cols_of(x):
         out = x.reindex(columns=shown, fill_value=0).copy()
@@ -2381,14 +2386,14 @@ def rc_comp_html(gr: pd.DataFrame, certs: pd.DataFrame, monthly: bool, show_all:
          f"<th colspan='{no}'>Lots Graded by Origin</th>", f"<th colspan='{npn}' class='sep'>Lots Graded by Port</th>",
          f"<th colspan='{npn}' class='sep certs-hdr'>Certs Change by Port (1-day lag)</th>",
          f"<th colspan='{npn}' class='sep certs-hdr'>Usage by Port (1-day lag)</th>",
-         "<th colspan='1' class='sep certs-hdr'>Certs</th><th colspan='2' class='sep'>Price</th></tr><tr class='h2'>"]
+         "<th colspan='1' class='sep certs-hdr'>Certs</th></tr><tr class='h2'>"]
     h += [f"<th rowspan='2'>{o}</th>" for o in RC_ORIGINS] + ["<th rowspan='2'>Total</th>"]
     for gi in range(3):
         for i, (ct, k) in enumerate(groups):
             e = edge if (i == 0) else "border-left:2px solid #ffffff;"
             h.append(f"<th colspan='{k}' style='background:{_rc_band(ct)};{e}letter-spacing:.06em;text-transform:uppercase'>{ct}</th>")
         h.append(f"<th rowspan='2'{' class=certs-hdr' if gi else ''}>Total</th>")
-    h += ["<th rowspan='2' class='certs-hdr sep'>Level</th><th rowspan='2' class='sep'>LRC</th><th rowspan='2'>Chg</th></tr><tr class='h3'>"]
+    h += ["<th rowspan='2' class='certs-hdr sep'>Level</th></tr><tr class='h3'>"]
     for gi in range(3):
         k = 0
         for i, (ct, kk) in enumerate(groups):
@@ -2401,9 +2406,10 @@ def rc_comp_html(gr: pd.DataFrame, certs: pd.DataFrame, monthly: bool, show_all:
     mx = {"l": max(float(lots_o.max().max()), 1.0), "lt": max(float(lots_o.sum(axis=1).max()), 1.0),
           "lp": max(float(lp.max().max()), 1.0),
           "c": max(float(cp.abs().max().max()), 1.0), "ct": max(float(chg_t.abs().max()), 1.0),
-          "u": max(float(up.abs().max().max()), 1.0), "ut": max(float(use_t.abs().max()), 1.0),
-          "pc": max(float(price_chg.abs().max()), 1.0)}
+          "u": max(float(up.abs().max().max()), 1.0), "ut": max(float(use_t.abs().max()), 1.0)}
     keys = list(lots_o.index)[::-1]
+    if nrows and not monthly:
+        keys = keys[:nrows]
     out = [f"<div class='mt' style='margin-bottom:4px'>{'Monthly' if monthly else 'Daily'} Robusta Grading (lots), "
            "Certs Change and Usage by Port, 1-day lag</div>", f"<div class='rwrap' style='height:{height}'>"] + h
     for k in keys:
@@ -2417,10 +2423,8 @@ def rc_comp_html(gr: pd.DataFrame, certs: pd.DataFrame, monthly: bool, show_all:
             cells = [_chg_heat_td(grp.loc[k, p], mx[sc_i]) for p in pcols]
             cells[0] = cells[0].replace("<td", "<td class='sep'", 1)
             r += cells + [_delta_td(tot_v.loc[k], mx[sc_t])]
-        lv, pr_, pchg = level.loc[k], price.loc[k], price_chg.loc[k]
+        lv = level.loc[k]
         r.append(f"<td class='tot sep'>{'' if pd.isna(lv) else _fmt_i(lv)}</td>")
-        r.append(f"<td class='sep'>{'' if pd.isna(pr_) else _fmt_i(pr_)}</td>")
-        r.append(_delta_td(pchg, mx["pc"]) if pd.notna(pchg) else "<td class='na'></td>")
         out.append("".join(r) + "</tr>")
     return "".join(out) + "</tbody></table></div>"
 
@@ -2428,6 +2432,16 @@ def rc_comp_html(gr: pd.DataFrame, certs: pd.DataFrame, monthly: bool, show_all:
 # ---------------------------------------------------------------------------------------------
 # Arabica Price Link: KC 1/2 spread vs certified stocks
 # ---------------------------------------------------------------------------------------------
+ROWS_OPTS = {"3M": 65, "6M": 130, "1Y": 260, "All": 0}
+
+
+def rows_radio(key: str) -> int:
+    """How many of the latest daily rows a big table draws (the browser, not the data, is what gets slow)."""
+    st.markdown("<div class='sb-label' style='margin:0 0 2px'>Daily rows</div>", unsafe_allow_html=True)
+    return ROWS_OPTS[st.radio("Daily rows", list(ROWS_OPTS), index=1, horizontal=True,
+                              label_visibility="collapsed", key=key)]
+
+
 KC_SPREAD_COL = "spread_c12"     # C1 - C2 (LSEG continuation)
 
 
@@ -2703,7 +2717,8 @@ if commodity == "Coffee":
                 st.markdown(kc_gr_monthly_html(g, gdays, month_tag, "auto"), unsafe_allow_html=True)
                 st.markdown("<div style='height:30px'></div>", unsafe_allow_html=True)
                 st.markdown("<div class='mt'>Daily Grading (bags)</div>", unsafe_allow_html=True)
-                st.markdown(kc_gr_daily_html(g, gdays, "72vh"), unsafe_allow_html=True)
+                n_g = rows_radio("arg_rows")
+                st.markdown(kc_gr_daily_html(g, gdays, "72vh", n_g), unsafe_allow_html=True)
 
             elif ar_g_view == "Visuals":
                 v1, v2, _ = st.columns([2.4, 1.8, 3])
@@ -2856,12 +2871,14 @@ if commodity == "Coffee":
                                  label_visibility="collapsed", key="acg_tbl_origins") == "Show all origins"
                 st.markdown(kc_cg_monthly_html(g, gdays, kc, t_all), unsafe_allow_html=True)
                 st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-                st.markdown(kc_cg_daily_html(g, gdays, kc, t_all), unsafe_allow_html=True)
+                n_u = rows_radio("acg_rows")
+                st.markdown(kc_cg_daily_html(g, gdays, kc, t_all, "72vh", False, False, n_u), unsafe_allow_html=True)
 
             elif ar_cg_view == "Usage Per Port":
+                n_up = rows_radio("acg_port_rows")
                 st.markdown(kc_cg_port_html(g, gdays, kc, True), unsafe_allow_html=True)
                 st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-                st.markdown(kc_cg_port_html(g, gdays, kc, False, "72vh"), unsafe_allow_html=True)
+                st.markdown(kc_cg_port_html(g, gdays, kc, False, "72vh", False, False, n_up), unsafe_allow_html=True)
 
             else:
                 du = kc_cg_daily(g, gdays, kc)
@@ -2917,26 +2934,21 @@ if commodity == "Coffee":
                 st.radio("View", ["Spread vs Certs"], horizontal=True, label_visibility="collapsed", key="apl_view")
             st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
             pl, eom_h = load_price_link(), load_eom_hist()
-            pl1, pl2, _ = st.columns([1.4, 1, 3])
+            pl1, _ = st.columns([1.4, 4])
             with pl1:
                 st.markdown("<div class='sb-label' style='margin:0 0 2px'>Frequency</div>", unsafe_allow_html=True)
                 apl_freq = st.radio("Frequency", ["Monthly", "Daily"], horizontal=True,
                                     label_visibility="collapsed", key="apl_freq")
             apl_df = kc_spread_certs_frame(pl, kc, eom_h, apl_freq)
-            years = sorted({p.year for p in apl_df.index})
-            with pl2:
-                st.markdown("<div class='sb-label' style='margin:0 0 2px'>From</div>", unsafe_allow_html=True)
-                apl_from = st.selectbox("From", ["All"] + [str(y) for y in years], index=0,
-                                        label_visibility="collapsed", key="apl_from")
-            if apl_from != "All":
-                apl_df = apl_df[[p.year >= int(apl_from) for p in apl_df.index]]
             st.plotly_chart(kc_spread_vs_certs_fig(apl_df, apl_freq), width="stretch",
                             config={"displayModeBar": False}, key="apl_chart")
 
         else:
             g, gdays = load_kc_grading()
             kc = kc_fill_from_ice(kc, g)
-            cv1, cv2, _ = st.columns([1.2, 2, 3])
+            cv1, cv2, cv3, _ = st.columns([1.2, 2, 1.8, 2])
+            with cv3:
+                n_cv = rows_radio("acv_rows")
             with cv1:
                 st.markdown("<div class='sb-label' style='margin:0 0 2px'>Split by</div>", unsafe_allow_html=True)
                 cv_split = st.radio("Split by", ["Origin", "Port"], horizontal=True,
@@ -2948,11 +2960,11 @@ if commodity == "Coffee":
                     cv_all = st.radio("Origins", ["Top 5 + Other", "Show all origins"], horizontal=True,
                                       label_visibility="collapsed", key="acv_origins") == "Show all origins"
             if cv_split == "Origin":
-                st.markdown(kc_cg_daily_html(g, gdays, kc, cv_all, "72vh", True, True), unsafe_allow_html=True)
+                st.markdown(kc_cg_daily_html(g, gdays, kc, cv_all, "72vh", True, True, n_cv), unsafe_allow_html=True)
                 st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
                 st.markdown(kc_cg_monthly_html(g, gdays, kc, cv_all, "auto", True, True), unsafe_allow_html=True)
             else:
-                st.markdown(kc_cg_port_html(g, gdays, kc, False, "72vh", True, True), unsafe_allow_html=True)
+                st.markdown(kc_cg_port_html(g, gdays, kc, False, "72vh", True, True, n_cv), unsafe_allow_html=True)
                 st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
                 st.markdown(kc_cg_port_html(g, gdays, kc, True, "auto", True, True), unsafe_allow_html=True)
     else:
@@ -2971,7 +2983,8 @@ if commodity == "Coffee":
             gr = load_rc_grading()
             rcv_all = st.radio("Ports", ["Top 5 + Other", "Show all ports"], horizontal=True,
                                label_visibility="collapsed", key="rcv_ports") == "Show all ports"
-            st.markdown(rc_comp_html(gr, certs, False, rcv_all, "72vh"), unsafe_allow_html=True)
+            n_rv = rows_radio("rcv_rows")
+            st.markdown(rc_comp_html(gr, certs, False, rcv_all, "72vh", "VG", n_rv), unsafe_allow_html=True)
             st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
             st.markdown(rc_comp_html(gr, certs, True, rcv_all, "auto"), unsafe_allow_html=True)
 
@@ -3166,7 +3179,8 @@ if commodity == "Coffee":
                     with st.container(key="rcg_lag_box"):
                         lag_pick = st.radio("Certs lag", ["0d", "1d"], index=1, horizontal=True,
                                             label_visibility="collapsed", key="rcg_lag")
-                st.markdown(daily_grading_certs_html(gr, certs, lag=int(lag_pick[0])), unsafe_allow_html=True)
+                n_rc = rows_radio("rcg_rows")
+                st.markdown(daily_grading_certs_html(gr, certs, lag=int(lag_pick[0]), nrows=n_rc), unsafe_allow_html=True)
             elif rcg_view == "Visuals":
                 du = daily_usage_series(gr, certs)
                 u_min, u_max = du.index.min(), du.index.max()
