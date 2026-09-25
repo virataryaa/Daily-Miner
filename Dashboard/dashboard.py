@@ -81,6 +81,8 @@ div[role="radiogroup"] label:has(input:checked) div[data-testid="stMarkdownConta
 /* Top-level commodity-section tabs (Arabica/Robusta): deep royal red instead of the navy every
    other pill uses, so this one level stands out as the primary switch. */
 .st-key-coffee_section_box div[role="radiogroup"] label:has(input:checked) { background: #8e1b3a !important; }
+.st-key-coffee_section_box div[role="radiogroup"] label { padding: 8px 34px !important; min-width: 90px; text-align: center; }
+.st-key-coffee_section_box div[role="radiogroup"] label p { font-size: 15px !important; }
 
 /* Arabica Matrix: the two side-by-side tables sit right next to each other */
 .st-key-ar_matrices_row [data-testid="stHorizontalBlock"] { gap: 0.5rem !important; }
