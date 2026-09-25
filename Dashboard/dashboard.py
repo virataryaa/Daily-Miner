@@ -798,7 +798,7 @@ def monthly_grading_certs_html(gr: pd.DataFrame, certs: pd.DataFrame, grade: str
                                height: str = "60vh") -> str:
     """One row per calendar month, capped to the grading feed's own range (it starts Jan 2022;
     certs go back to 2008 but there is nothing to grade-compare before grading itself exists).
-    Every origin gets its own column (lots), LRC total certs change (bags) sits alongside it,
+    Every origin gets its own column (lots), LRC total certs change (lots) sits alongside it,
     both sharing a single Month column so the rows line up."""
     lots = gr.groupby([gr["PanelDate"].dt.to_period("M"), "OriginName"])["NoLots"].sum().unstack(fill_value=0)
     lots_tot = lots.sum(axis=1)
@@ -838,7 +838,7 @@ def monthly_grading_certs_html(gr: pd.DataFrame, certs: pd.DataFrame, grade: str
         cls = "pos" if v > 0 else "neg" if v < 0 else ""
         return f"<td class='cb sep'>{bar}<span class='{cls}'>{v:+,}</span></td>"
 
-    head = ["<div class='mt' style='margin-bottom:4px'>Grading (lots) & LRC Certified Stocks Change (bags), by month</div>",
+    head = ["<div class='mt' style='margin-bottom:4px'>Grading (lots) & LRC Certified Stocks Change (lots), by month</div>",
             "<div class='rwrap' style='height:", height, "'><table class='rpt'><thead>",
             "<tr class='h1'><th class='dt' rowspan='2'>Month</th>",
             f"<th colspan='{len(origins) + 1}'>Lots Graded by Origin</th>",
