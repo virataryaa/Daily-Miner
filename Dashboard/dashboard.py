@@ -2449,13 +2449,6 @@ if commodity == "Coffee":
                         st.plotly_chart(kc_cum_lines_cached(s_, f"{ttl} | cumulative {m_lbl}", scm, g_max),
                                         width="stretch", config=gcfg, key=f"arg_cum_p_{p_}")
 
-                st.markdown("<div class='sec'>Per Country of Port</div>", unsafe_allow_html=True)
-                for col_, ct in zip(st.columns(4), ["Belgium", "Spain", "Germany", "USA"]):
-                    with col_:
-                        cs = m_p.reindex(columns=[p_ for p_ in KC_GR_PORTS if KC_GR_PORT_COUNTRY[p_] == ct], fill_value=0).sum(axis=1)
-                        st.plotly_chart(kc_cum_lines_cached(cs, f"{ct} | cumulative {m_lbl}", scm, g_max),
-                                        width="stretch", config=gcfg, key=f"arg_cum_c_{ct}")
-
             elif ar_g_view == "Pending":
                 dn1, dn2 = st.columns(2)
                 with dn1:
