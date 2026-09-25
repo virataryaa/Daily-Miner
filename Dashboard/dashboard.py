@@ -785,7 +785,7 @@ def _dayofyear_bands_fig(s: pd.Series, title: str, height: int = 440) -> go.Figu
     (weekends) don't fabricate repeated or zero values in the bands."""
     w = s.dropna().to_frame("v")
     w["x"], w["yr"] = w.index.dayofyear, w.index.year
-    w = w[w["x"] <= 365]
+    w = w[w["x"] <= 366]  # 366 so a leap year keeps its last day
     cur = int(w["yr"].max())
     hist = w[w["yr"] < cur]
     band = hist.groupby("x")["v"].agg(lo="min", avg="mean", hi="max").sort_index()
@@ -807,7 +807,7 @@ def _dayofyear_bands_fig(s: pd.Series, title: str, height: int = 440) -> go.Figu
             fig.add_trace(go.Scatter(x=g["x"], y=g["v"], mode="lines", name=str(yr), line=dict(color=color, width=width),
                                      hovertemplate="%{y:,.0f}<extra>" + str(yr) + "</extra>"))
     chart_layout(fig, title, height)
-    fig.update_layout(xaxis=dict(title="Day of year", dtick=30, range=[1, 365]),
+    fig.update_layout(xaxis=dict(title="Day of year", dtick=30, range=[1, 366]),
                       legend=dict(y=-0.28))
     return fig
 
@@ -1073,7 +1073,7 @@ def _cumulative_bands_fig(s: pd.Series, title: str, m: int, first: pd.Timestamp,
     cum = daily.groupby(cy).cumsum()
     starts = pd.to_datetime([f"{y}-{m:02d}-01" for y in cy])
     w = pd.DataFrame({"v": cum.values.astype(float), "x": (idx - starts).days + 1, "yr": cy}, index=idx)
-    w = w[w["x"] <= 365]
+    w = w[w["x"] <= 366]  # 366 so a leap year keeps its last day
     cur = int(w["yr"].max())
     hist = w[w["yr"] < cur]
     if not hist.empty:
@@ -1098,7 +1098,7 @@ def _cumulative_bands_fig(s: pd.Series, title: str, m: int, first: pd.Timestamp,
     offs = np.concatenate([[0], np.cumsum([MONTH_DAYS[k] for k in order])])[:12] + 1
     chart_layout(fig, title, height)
     fig.update_layout(xaxis=dict(tickmode="array", tickvals=list(offs[::2]),
-                                 ticktext=[MONTH_ABBR[order[i]] for i in range(0, 12, 2)], range=[1, 365]),
+                                 ticktext=[MONTH_ABBR[order[i]] for i in range(0, 12, 2)], range=[1, 366]),
                       legend=dict(font=dict(size=10)))
     return fig
 
@@ -1193,7 +1193,12 @@ def daily_usage_series(gr: pd.DataFrame, certs: pd.DataFrame, grade: str = "VG",
 
     g_start = gr["PanelDate"].min()
     idx = pd.DatetimeIndex(sorted(d for d in cd if d >= g_start))
-    g_on_day = lots_tot.reindex(idx, fill_value=0)
+    # a panel that ran on a day with no certs print (weekend / holiday) is attributed to the next certs day,
+    # otherwise its lots would silently drop out of Usage
+    cd_idx = pd.DatetimeIndex(cd)
+    tpos = cd_idx.searchsorted(lots_tot.index)
+    keep = tpos < len(cd_idx)
+    g_on_day = lots_tot[keep].groupby(cd_idx[tpos[keep]]).sum().reindex(idx, fill_value=0)
     c_lagged = pd.Series([lagged(d) for d in idx], index=idx, dtype=float)
     return (g_on_day - c_lagged).dropna()
 
@@ -1317,7 +1322,9 @@ def daily_grading_certs_html(gr: pd.DataFrame, certs: pd.DataFrame, grade: str =
     cd = list(chg.index.sort_values())
 
     def lagged_chg(d):
-        i = np.searchsorted(cd, d) + lag
+        pos = int(np.searchsorted(cd, d))
+        on_certs_day = pos < len(cd) and cd[pos] == d
+        i = pos + (lag if on_certs_day else max(lag - 1, 0))  # an off-day's first certs day after it already counts as 1 day later
         return chg.loc[cd[i]] if 0 <= i < len(cd) else np.nan
 
     g_start = gr["PanelDate"].min()
@@ -1603,7 +1610,7 @@ def kc_cum_lines_fig(s: pd.Series, title: str, m: int, last: pd.Timestamp, n_yea
     cum = daily.groupby(cy).cumsum()
     starts = pd.to_datetime([f"{y}-{m:02d}-01" for y in cy])
     w = pd.DataFrame({"v": cum.values.astype(float), "x": (idx - starts).days + 1, "yr": cy}, index=idx)
-    w = w[w["x"] <= 365]
+    w = w[w["x"] <= 366]  # 366 so a leap year keeps its last day
     yrs = sorted(w["yr"].unique())[-n_years:]
     pal = KC_GR_CY_COLORS[-len(yrs):]
     for yr, color in zip(yrs, pal):
@@ -1859,7 +1866,7 @@ def kc_cg_daily(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame) -> pd.DataFr
 def kc_origin_certs(kc: pd.DataFrame) -> pd.DataFrame:
     """Certs per origin by name. LSEG has no Kenya RIC, so Kenya is the residual of the total."""
     cols = {f"KC-{c}-TOT": n for c, n in KC_ORIGIN_NAMES.items() if f"KC-{c}-TOT" in kc.columns}
-    o = kc.set_index("Date")[list(cols)].astype(float).rename(columns=cols).ffill(limit=5)
+    o = kc.set_index("Date")[list(cols)].astype(float).rename(columns=cols).ffill(limit=5).fillna(0)  # a blank RIC means no stock of that origin
     tot = kc.set_index("Date")["KC-TOT-TOT"].astype(float)
     o["Kenya"] = (tot - o.sum(axis=1)).clip(lower=0)
     return o
