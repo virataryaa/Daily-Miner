@@ -816,13 +816,13 @@ def monthly_grading_certs_html(gr: pd.DataFrame, certs: pd.DataFrame, grade: str
     l_scale = max(lots_tot.max(), 1)
     c_scale = max(chg.abs().max(), 1) if len(chg) else 1
 
-    col_max = {o: max(float(lots[o].max()), 1.0) for o in origins}
+    all_max = max(float(lots[origins].max().max()), 1.0)
 
-    def lcell(v, col_top):
+    def lcell(v):
         if pd.isna(v) or v == 0:
             return "<td></td>"
         v = int(v)
-        alpha = min(v / col_top, 1.0) * 0.85  # per-origin scale: transparent at 0, deepest green at that origin's own max
+        alpha = min(v / all_max, 1.0) * 0.85  # one scale across every origin, so cells are comparable to each other
         return f"<td style='background:rgba(31,157,111,{alpha:.2f})'>{v:,}</td>"
 
     def totcell(v, sc):
@@ -848,7 +848,7 @@ def monthly_grading_certs_html(gr: pd.DataFrame, certs: pd.DataFrame, grade: str
     body = []
     for pr in months:
         row = [f"<tr><td class='d'>{pr.strftime('%b %Y')}</td>"]
-        row += [lcell(lots.loc[pr, o] if pr in lots.index else np.nan, col_max[o]) for o in origins]
+        row += [lcell(lots.loc[pr, o] if pr in lots.index else np.nan) for o in origins]
         row.append(totcell(lots_tot.get(pr, 0), l_scale))
         row.append(chgcell(chg.get(pr, np.nan)))
         row.append("</tr>")
