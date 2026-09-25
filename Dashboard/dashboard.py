@@ -2024,8 +2024,7 @@ def kc_cg_monthly_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, show_
     sc = {"p": max(float(lots.max().max()), 1.0), "pt": max(float(lots.sum(axis=1).max()), 1.0),
           "c": max(float(chg_m.abs().max().max()), 1.0), "ct": max(float(chg_m.sum(axis=1).abs().max()), 1.0),
           "u": max(float(use_m.abs().max().max()), 1.0), "ut": max(float(use_m.sum(axis=1).abs().max()), 1.0)}
-    out = ["<div class='mt' style='margin-bottom:4px'>Monthly (bags): Passed, change in certs and Usage (Passed minus certs change, "
-           "same day) for each origin. Total is the sum of the origin columns.</div>",
+    out = ["<div class='mt' style='margin-bottom:4px'>Monthly Grading, Certs Change and Usage by Origin (bags)</div>",
            f"<div class='rwrap' style='height:{height}'>"]
     out += _cg_head("Month", cols)
     for pr in lots.index[::-1]:
@@ -2046,8 +2045,7 @@ def kc_cg_daily_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, show_al
     sc = {"p": max(float(pp.max().max()), 1.0), "pt": max(float(pp.sum(axis=1).max()), 1.0),
           "c": max(float(ok.abs().max().max()), 1.0), "ct": max(float(ok.sum(axis=1).abs().max()), 1.0),
           "u": max(float(use.loc[ok.index].abs().max().max()), 1.0), "ut": max(float(use.loc[ok.index].sum(axis=1).abs().max()), 1.0)}
-    out = ["<div class='mt' style='margin-bottom:4px'>Daily (bags): Passed, change in certs and Usage (Passed minus certs change, "
-           "same day) for each origin. Total is the sum of the origin columns.</div>",
+    out = ["<div class='mt' style='margin-bottom:4px'>Daily Grading, Certs Change and Usage by Origin (bags)</div>",
            f"<div class='rwrap' style='height:{height}'>"]
     out += _cg_head("Date", cols)
     for dt in days[::-1]:
