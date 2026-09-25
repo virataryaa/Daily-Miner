@@ -385,6 +385,147 @@ def fmt_int(v):
     return "-" if pd.isna(v) else f"{int(v):,}"
 
 
+# ------------------------------------------------------------------ KC (Arabica) visuals
+KC_PORT_COLORS = {"AN": NAVY, "NY": TEAL, "MI": AMBER, "HO": "#9b6bb3", "NO": RED, "BA": GREEN, "HA": "#6b7fb5"}
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_major_ports(df: pd.DataFrame, min_share: float = 0.01) -> list:
+    tot = df["KC-TOT-TOT"].astype(float).mean()
+    if not tot:
+        return []
+    share = {p: df[f"KC-TOT-{p}"].astype(float).mean() / tot for p in KC_PORT_NAMES}
+    return [p for p in sorted(share, key=lambda p: -(0 if pd.isna(share[p]) else share[p]))
+            if pd.notna(share[p]) and share[p] >= min_share]
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_origin_palette(df: pd.DataFrame) -> tuple:
+    """(origins biggest-first by average total stock, colours). Top 5 keep strong app colours,
+    every smaller origin gets a lighter tint that fades with rank."""
+    avg = {o: df[f"KC-{o}-TOT"].astype(float).mean() for o in KC_ORIGIN_NAMES}
+    order = sorted(KC_ORIGIN_NAMES, key=lambda o: -(avg[o] or 0))
+    strong = [NAVY, TEAL, AMBER, RED, GREEN]
+    soft = ["#9b6bb3", "#6b7fb5", "#c0722c", "#4a5578", "#8fa3d1", "#b58f4a", GREY, "#c5cbdd"]
+    colors = {}
+    for i, o in enumerate(order):
+        colors[o] = strong[i] if i < len(strong) else tint(soft[(i - 5) % len(soft)], max(0.75 - 0.06 * (i - 5), 0.32))
+    return order, colors
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_total_certs_fig(df: pd.DataFrame) -> go.Figure:
+    s = df[["Date", "KC-TOT-TOT"]].dropna()
+    fig = go.Figure(go.Scatter(
+        x=s["Date"], y=s["KC-TOT-TOT"], mode="lines", line=dict(color=NAVY, width=2),
+        fill="tozeroy", fillcolor="rgba(10,36,99,0.07)", hovertemplate="%{y:,.0f}<extra></extra>"))
+    return chart_layout(fig, "Total Certs")
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_ports_certs_fig(df: pd.DataFrame) -> go.Figure:
+    """Stacked area of certs per port (biggest at the bottom); minor ports pooled into Other."""
+    majors = kc_major_ports(df)
+    minors = [p for p in KC_PORT_NAMES if p not in majors]
+    fig = go.Figure()
+    for p in majors:
+        fig.add_trace(go.Scatter(
+            x=df["Date"], y=df[f"KC-TOT-{p}"].astype(float).fillna(0), mode="lines", name=KC_PORT_NAMES[p],
+            stackgroup="one", line=dict(width=0.6, color=KC_PORT_COLORS.get(p, GREY)),
+            fillcolor=KC_PORT_COLORS.get(p, GREY),
+            hovertemplate="%{y:,.0f}<extra>" + KC_PORT_NAMES[p] + "</extra>"))
+    if minors:
+        other = df[[f"KC-TOT-{p}" for p in minors]].astype(float).fillna(0).sum(axis=1)
+        fig.add_trace(go.Scatter(x=df["Date"], y=other, mode="lines", name="Other", stackgroup="one",
+                                 line=dict(width=0.6, color="#c5cbdd"), fillcolor="#c5cbdd",
+                                 hovertemplate="%{y:,.0f}<extra>Other</extra>"))
+    return chart_layout(fig, "Certs Per Port")
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_origin_mix_fig(df: pd.DataFrame, show_all: bool = False, top_n: int = 5) -> go.Figure:
+    """Stacked area of certs per origin. Aggregated to Top-N + Other by default; the 'show all
+    origins' toggle expands to all 16."""
+    order, colors = kc_origin_palette(df)
+    shown = order if show_all else order[:top_n]
+    minors = [] if show_all else order[top_n:]
+    fig = go.Figure()
+    for o in shown:
+        fig.add_trace(go.Scatter(
+            x=df["Date"], y=df[f"KC-{o}-TOT"].astype(float).fillna(0), mode="lines", name=KC_ORIGIN_NAMES[o],
+            stackgroup="one", line=dict(width=0.6, color=colors[o]), fillcolor=colors[o],
+            hovertemplate="%{y:,.0f}<extra>" + KC_ORIGIN_NAMES[o] + "</extra>"))
+    if minors:
+        other = df[[f"KC-{o}-TOT" for o in minors]].astype(float).fillna(0).sum(axis=1)
+        fig.add_trace(go.Scatter(x=df["Date"], y=other, mode="lines", name="Other", stackgroup="one",
+                                 line=dict(width=0.6, color="#c5cbdd"), fillcolor="#c5cbdd",
+                                 hovertemplate="%{y:,.0f}<extra>Other</extra>"))
+    title = "Certs Per Origin" + ("" if show_all else f" (Top {top_n} + Other)")
+    return chart_layout(fig, title)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_latest_breakup_fig(df: pd.DataFrame, top_n: int = 5) -> go.Figure:
+    """Donut of the latest breakup by origin, Top-N + Other (same aggregation as the mix chart)."""
+    order, colors = kc_origin_palette(df)
+    last = df.iloc[-1]
+    tot = float(last["KC-TOT-TOT"])
+    vals = {o: float(last[f"KC-{o}-TOT"]) for o in order
+            if pd.notna(last[f"KC-{o}-TOT"]) and last[f"KC-{o}-TOT"] > 0}
+    shown = [o for o in order if o in vals][:top_n]
+    rest = sum(v for o, v in vals.items() if o not in shown)
+    labels = [KC_ORIGIN_NAMES[o] for o in shown]
+    amounts = [vals[o] for o in shown]
+    cols = [colors[o] for o in shown]
+    if rest > 0:
+        labels.append("Other")
+        amounts.append(rest)
+        cols.append("#c5cbdd")
+    fig = go.Figure(go.Pie(
+        labels=labels, values=amounts, hole=0.66, sort=False, direction="clockwise",
+        marker=dict(colors=cols, line=dict(color="#fafafa", width=3)),
+        textinfo="label+percent", textposition="outside", textfont=dict(size=12, color="#1a1a2e"),
+        hovertemplate="%{label}: %{value:,.0f} (%{percent})<extra></extra>", showlegend=False))
+    chart_layout(fig, f"Latest Breakup ({last['Date'].strftime('%d %b %Y')})", 360)
+    fig.update_layout(
+        margin=dict(t=44, b=20, l=40, r=40),
+        annotations=[dict(text=f"<b>{tot:,.0f}</b><br><span style='font-size:11px;color:#7a86a8'>total</span>",
+                          x=0.5, y=0.5, showarrow=False, font=dict(size=22, color=NAVY))])
+    return fig
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_rolling_origins_fig(df: pd.DataFrame, origins: list, n: int, start: pd.Timestamp,
+                          end: pd.Timestamp) -> go.Figure:
+    """Rolling n-observation change, one line per chosen origin."""
+    _, colors = kc_origin_palette(df)
+    fig = go.Figure()
+    for o in origins:
+        r = df.set_index("Date")[f"KC-{o}-TOT"].dropna().astype(float).diff(n).dropna()
+        r = r[(r.index >= start) & (r.index <= end)]
+        fig.add_trace(go.Scatter(x=r.index, y=r.values, mode="lines", name=KC_ORIGIN_NAMES[o],
+                                 line=dict(color=colors.get(o, GREY), width=2.0),
+                                 hovertemplate="%{y:+,.0f}<extra>" + KC_ORIGIN_NAMES[o] + "</extra>"))
+    fig.add_hline(y=0, line=dict(color="#c5cbdd", width=1))
+    label = ", ".join(KC_ORIGIN_NAMES[o] for o in origins) if origins else "no origin selected"
+    chart_layout(fig, f"Rolling Change: {label} ({n}d)", height=360)
+    fig.update_layout(yaxis=dict(tickformat="+,"), showlegend=len(origins) > 1)
+    return fig
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_seasonality_options(df: pd.DataFrame) -> dict:
+    """Label -> column. Total first, then ports, then origins - each group biggest-first."""
+    opts = {"Total": "KC-TOT-TOT"}
+    for p in kc_major_ports(df):
+        opts[f"Port: {KC_PORT_NAMES[p]}"] = f"KC-TOT-{p}"
+    order, _ = kc_origin_palette(df)
+    for o in order:
+        if df[f"KC-{o}-TOT"].astype(float).mean() > 0:
+            opts[f"Origin: {KC_ORIGIN_NAMES[o]}"] = f"KC-{o}-TOT"
+    return opts
+
+
 HISTORY_YEARS = 2
 PORT_ORDER = ["AMS", "ANT", "BAR", "BRE", "FEL", "GEN", "HAM", "LIV", "LON", "NOR", "ROT", "TRI"]
 
@@ -1346,8 +1487,89 @@ if commodity == "Coffee":
                     st.markdown(f"<div class='mt'>Latest Certified Stocks ({latest_ts.strftime('%d %b %Y')}, bags)</div>",
                                unsafe_allow_html=True)
                     st.markdown(kc_latest_matrix_html(kc, latest_ts), unsafe_allow_html=True)
+
+            elif ar_view == "Visuals":
+                ac_min, ac_max = kc["Date"].min(), kc["Date"].max()
+                ac_span = st.radio("History", ["1Y", "3Y", "5Y", "All", "Custom"], index=2, horizontal=True,
+                                   label_visibility="collapsed", key="ac_chart_span")
+                if ac_span == "Custom":
+                    acs1, acs2, _ = st.columns([1, 1, 4])
+                    with acs1:
+                        ac_from = st.date_input("Start date", value=(ac_max - pd.DateOffset(years=3)).date(),
+                                                min_value=ac_min.date(), max_value=ac_max.date(), key="ac_chart_from")
+                    with acs2:
+                        ac_to = st.date_input("End date", value=ac_max.date(),
+                                              min_value=ac_min.date(), max_value=ac_max.date(), key="ac_chart_to")
+                    ac_start, ac_end = pd.Timestamp(ac_from), pd.Timestamp(ac_to)
+                elif ac_span == "All":
+                    ac_start, ac_end = ac_min, ac_max
+                else:
+                    ac_start, ac_end = ac_max - pd.DateOffset(years=int(ac_span[0])), ac_max
+                acview = kc[(kc["Date"] >= ac_start) & (kc["Date"] <= ac_end)]
+                accfg = {"displayModeBar": False}
+
+                st.markdown("<div class='sec'>Stock levels</div>", unsafe_allow_html=True)
+                acv1, acv2 = st.columns(2)
+                with acv1:
+                    st.plotly_chart(kc_total_certs_fig(acview), width="stretch", config=accfg)
+                with acv2:
+                    st.plotly_chart(kc_ports_certs_fig(acview), width="stretch", config=accfg)
+
+                st.markdown("<div class='sec'>Origin mix</div>", unsafe_allow_html=True)
+                show_all = st.radio("Origins shown", ["Top 5 + Other", "Show all origins"], horizontal=True,
+                                    label_visibility="collapsed", key="ac_origin_all") == "Show all origins"
+                acm1, acm2 = st.columns(2)
+                with acm1:
+                    st.plotly_chart(kc_origin_mix_fig(acview, show_all=show_all), width="stretch", config=accfg)
+                with acm2:
+                    st.plotly_chart(kc_latest_breakup_fig(kc), width="stretch", config=accfg)
+
+                st.markdown("<div class='sec'>Momentum</div>", unsafe_allow_html=True)
+                aco1, aco2 = st.columns(2)
+                with aco1:
+                    ac_roll_n = st.radio("Rolling window", [5, 20, 60], index=1, horizontal=True,
+                                        format_func=lambda n: f"Rolling {n}d", label_visibility="collapsed",
+                                        key="ac_roll_n")
+                with aco2:
+                    ac_order, _ = kc_origin_palette(kc)
+                    ac_origin_opts = {KC_ORIGIN_NAMES[o]: o for o in ac_order}
+                    ac_roll_pick = st.multiselect("Rolling origins", list(ac_origin_opts), default=list(ac_origin_opts)[:1],
+                                                  key="ac_roll_origins", label_visibility="collapsed",
+                                                  placeholder="Choose origins")
+                acr1, acr2 = st.columns(2)
+                with acr1:
+                    st.plotly_chart(rolling_fig(kc.set_index("Date")["KC-TOT-TOT"], ac_roll_n, ac_start, ac_end,
+                                                f"Rolling Change: Total ({ac_roll_n}d)"), width="stretch", config=accfg)
+                with acr2:
+                    ac_roll_codes = [ac_origin_opts[n] for n in ac_roll_pick]
+                    st.plotly_chart(kc_rolling_origins_fig(kc, ac_roll_codes, ac_roll_n, ac_start, ac_end),
+                                    width="stretch", config=accfg)
+
             else:
-                st.markdown("<div class='card-desc'>Coming next.</div>", unsafe_allow_html=True)
+                as_opts = kc_seasonality_options(kc)
+                as_left, as_right = st.columns([2, 3])
+                with as_left:
+                    as_pick = st.selectbox("Seasonality", list(as_opts), key="ac_season_view")
+                    st.plotly_chart(seasonality_fig(kc, as_opts[as_pick], f"Seasonality: {as_pick}"),
+                                    width="stretch", config={"displayModeBar": False})
+                with as_right:
+                    st.markdown(f"<div class='mt side'>Monthly Change: {as_pick}</div>", unsafe_allow_html=True)
+                    st.markdown(monthly_change_html(kc, as_opts[as_pick]), unsafe_allow_html=True)
+                as_chg_all = kc.set_index("Date")[as_opts[as_pick]].dropna().astype(float).diff().dropna()
+                st.markdown("<div style='height:36px'></div>", unsafe_allow_html=True)
+                _asl, asd, _asr = st.columns([1, 2, 1])
+                with asd:
+                    as_dist_span = st.radio("Distribution window", ["Last 1Y", "Last 5Y", "All"], index=1,
+                                            horizontal=True, label_visibility="collapsed", key="ac_dist_span")
+                    as_last_dt = as_chg_all.index.max()
+                    if as_dist_span == "Last 1Y":
+                        as_chg = as_chg_all[as_chg_all.index >= as_last_dt - pd.DateOffset(years=1)]
+                    elif as_dist_span == "Last 5Y":
+                        as_chg = as_chg_all[as_chg_all.index >= as_last_dt - pd.DateOffset(years=5)]
+                    else:
+                        as_chg = as_chg_all[as_chg_all.index >= DIST_START]
+                    st.plotly_chart(distribution_fig(as_chg, f"Daily Change Distribution: {as_pick}", "chg"),
+                                    width="stretch", config={"displayModeBar": False})
 
         elif ar_section == "Grading":
             with st.container(key="rc_view_box"):
