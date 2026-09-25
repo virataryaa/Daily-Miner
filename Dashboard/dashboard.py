@@ -178,6 +178,7 @@ span[data-baseweb="tag"] svg { fill: #ffffff !important; }
 .rpt.tiny td { padding: 1px 4px; min-width: 0; }
 .rpt.tiny thead th { padding: 3px 4px; font-size: 9px; letter-spacing: 0; }
 .rpt.tiny td.cbl, .rpt.tiny td.cb { min-width: 36px; }
+.rpt.tiny td.pr, .rpt.tiny th.pr { font-size: 8px; padding: 1px 2px; min-width: 0; letter-spacing: 0; }
 .rpt.big { font-size: 13.5px; }
 .rpt.big td { padding: 8px 14px; min-width: 62px; }
 .rpt.big thead th { padding: 8px 14px; font-size: 12.5px; top: 0 !important; }
@@ -1963,6 +1964,10 @@ def _cg_origin_split(p: pd.DataFrame, chg_o: pd.DataFrame, show_all: bool, top_n
     return list(pp.columns), pp, cc, ff
 
 
+_ABBR = {v: k for k, v in KC_ORIGIN_NAMES.items()}
+_ABBR["Other"] = "OTH"
+
+
 def _cg_head(first_col: str, cols: list, with_rate: bool = False) -> list:
     """Header for the Certs & Grading tables: Passed | (Pass %) | Certs Change | Usage, each split by origin plus a Total."""
     n = len(cols) + 1
@@ -1978,14 +1983,16 @@ def _cg_head(first_col: str, cols: list, with_rate: bool = False) -> list:
         certs = grp >= groups - 2
         sep_first = grp >= 1
         for i, o in enumerate(cols + ["Total"]):
-            cls = ("certs-hdr" if certs else "") + (" sep" if (sep_first and i == 0) else "")
-            h.append(f"<th class='{cls.strip()}'>{o}</th>" if cls.strip() else f"<th>{o}</th>")
+            is_pr = with_rate and grp == 1
+            cls = ("certs-hdr" if certs else "") + (" sep" if (sep_first and i == 0) else "") + (" pr" if is_pr else "")
+            lbl = (_ABBR.get(o, o[:3].upper()) if o != "Total" else "Tot") if is_pr else o
+            h.append(f"<th class='{cls.strip()}'>{lbl}</th>" if cls.strip() else f"<th>{lbl}</th>")
     h.append("</tr></thead><tbody>")
     return h
 
 
 def _rate_td(v, sep: bool = False) -> str:
-    cls = " class='sep'" if sep else ""
+    cls = " class='pr sep'" if sep else " class='pr'"
     if pd.isna(v):
         return f"<td{cls}></td>"
     alpha = 0.08 + 0.77 * min(max(float(v), 0.0), 100.0) / 100.0
@@ -2151,9 +2158,11 @@ def _cg_port_head(first_col: str, cols: list, with_rate: bool = False) -> list:
     for gi in range(len(blocks)):
         for i, (ct, k) in enumerate(groups):
             e = edge if (gi and i == 0) else ("border-left:2px solid #ffffff;" if i else "")
-            h.append(f"<th colspan='{k}' style='background:{KC_COUNTRY_COLORS[ct]};{e}letter-spacing:.06em;"
+            pr = " class='pr'" if (with_rate and gi == 1) else ""
+            h.append(f"<th colspan='{k}'{pr} style='background:{KC_COUNTRY_COLORS[ct]};{e}letter-spacing:.06em;"
                      f"text-transform:uppercase'>{ct}</th>")
-        h.append(f"<th rowspan='2'{' class=certs-hdr' if blocks[gi][1] else ''}>Total</th>")
+        tcls = "certs-hdr" if blocks[gi][1] else ("pr" if (with_rate and gi == 1) else "")
+        h.append(f"<th rowspan='2'{' class=' + tcls if tcls else ''}>{'Tot' if (with_rate and gi == 1) else 'Total'}</th>")
     h.append("</tr><tr class='h3'>")
     for gi in range(len(blocks)):
         k = 0
@@ -2161,7 +2170,8 @@ def _cg_port_head(first_col: str, cols: list, with_rate: bool = False) -> list:
             for j in range(kk):
                 c = cols[k]
                 e = edge if (gi and k == 0) else ("border-left:2px solid #ffffff;" if j == 0 and i else "")
-                h.append(f"<th style='background:color-mix(in srgb, {KC_COUNTRY_COLORS[ct]} 58%, #0a2463);{e}'>"
+                pr = " class='pr'" if (with_rate and gi == 1) else ""
+                h.append(f"<th{pr} style='background:color-mix(in srgb, {KC_COUNTRY_COLORS[ct]} 58%, #0a2463);{e}'>"
                          f"{KC_GR_PORT_SHORT[c]}</th>")
                 k += 1
     h.append("</tr></thead><tbody>")
