@@ -1980,9 +1980,39 @@ def _cg_origin_split(p: pd.DataFrame, chg_o: pd.DataFrame, show_all: bool, top_n
     return list(pp.columns), pp, cc
 
 
+def _cg_head(first_col: str, cols: list) -> list:
+    """Header for the Certs & Grading tables: Passed | Certs Change | Usage, each split by origin plus a Total."""
+    n = len(cols) + 1
+    h = ["<table class='rpt cmp'><thead><tr class='h1'>",
+         f"<th class='dt' rowspan='2'>{first_col}</th>",
+         f"<th colspan='{n}'>Bags Passed by Origin</th>",
+         f"<th colspan='{n}' class='sep certs-hdr'>Certs Change by Origin</th>",
+         f"<th colspan='{n}' class='sep certs-hdr'>Usage by Origin</th></tr><tr class='h2'>"]
+    for grp in range(3):
+        for i, o in enumerate(cols + ["Total"]):
+            cls = ("certs-hdr" if grp else "") + (" sep" if (grp and i == 0) else "")
+            h.append(f"<th class='{cls.strip()}'>{o}</th>" if cls.strip() else f"<th>{o}</th>")
+    h.append("</tr></thead><tbody>")
+    return h
+
+
+def _cg_row(label: str, pas: pd.Series, chg: pd.Series, use: pd.Series, cols: list, sc: dict, has: bool = True) -> str:
+    """One data row: Passed cells, Certs-change cells, Usage cells (origins then a Total each)."""
+    r = [f"<tr><td class='d'>{label}</td>"]
+    r += [_heat_td(pas[o], sc["p"]) for o in cols] + [_bar_td(pas.sum(), sc["pt"])]
+    if has:
+        for k, ser, tsc in (("c", chg, sc["ct"]), ("u", use, sc["ut"])):
+            cells = [_chg_heat_td(ser[o], sc[k]) for o in cols]
+            cells[0] = cells[0].replace("<td", "<td class='sep'", 1)
+            r += cells + [_delta_td(ser.sum(), tsc)]
+    else:
+        r += ["<td class='na sep'></td>"] + ["<td class='na'></td>"] * len(cols) + ["<td class='na sep'></td>"] + ["<td class='na'></td>"] * len(cols)
+    return "".join(r) + "</tr>"
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def kc_cg_monthly_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, show_all: bool = False,
-                       height: str = "60vh") -> str:
+                       height: str = "auto") -> str:
     days = pd.DatetimeIndex(days)
     d = kc_cg_daily(g, pd.Series(days), kc)
     p = kc_gr_wide(g, pd.Series(days), "Passed").reindex(d.index)
@@ -1990,60 +2020,38 @@ def kc_cg_monthly_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, show_
     cols, pp, cc = _cg_origin_split(p, chg_o, show_all)
     per = d.index.to_period("M")
     lots, chg_m = pp.groupby(per).sum(), cc.groupby(per).sum()
-    m = kc_cg_monthly(g, pd.Series(days), kc)
-    mx, psc = max(float(lots.max().max()), 1.0), max(float(m["Passed"].max()), 1.0)
-    csc, usc = max(float(m["Change"].abs().max()), 1.0), max(float(m["Usage"].abs().max()), 1.0)
-    pcs = max(float(m["UsagePct"].abs().max()), 1.0)
-    cmx = max(float(chg_m.abs().max().max()), 1.0)
-    out = ["<div class='mt' style='margin-bottom:4px'>Bags Passed by month and KC Certified Stocks (bags). Usage is Passed minus the "
-           "change in certs, same day. Usage % is Usage over that month's average certs level.</div>",
-           "<div class='rwrap' style='height:", height, "'><table class='rpt cmp'><thead><tr class='h1'>",
-           f"<th class='dt' rowspan='2'>Month</th><th colspan='{len(cols) + 1}'>Bags Passed by Origin</th>",
-           "<th colspan='4' class='sep certs-hdr'>KC Certs</th>",
-           f"<th colspan='{len(cols)}' class='sep certs-hdr'>Certs Change by Origin</th></tr><tr class='h2'>"]
-    out += [f"<th>{o}</th>" for o in cols]
-    out += ["<th>Total</th><th class='sep certs-hdr'>Level</th><th class='certs-hdr'>Change</th>",
-            "<th class='certs-hdr'>Usage</th><th class='certs-hdr'>Usage %</th>"]
-    out += [f"<th class='certs-hdr{' sep' if i == 0 else ''}'>{o}</th>" for i, o in enumerate(cols)] + ["</tr></thead><tbody>"]
-    for pr in m.index[::-1]:
-        oc_cells = "".join(_chg_heat_td(chg_m.loc[pr, o], cmx).replace("<td", "<td class='sep'", 1) if i == 0
-                           else _chg_heat_td(chg_m.loc[pr, o], cmx) for i, o in enumerate(cols))
-        out.append(f"<tr><td class='d'>{pr.strftime('%b %Y')}</td>"
-                   + "".join(_heat_td(lots.loc[pr, o], mx) for o in cols) + _bar_td(m.loc[pr, "Passed"], psc)
-                   + f"<td class='tot sep'>{_fmt_i(m.loc[pr, 'Level'])}</td>"
-                   + _delta_td(m.loc[pr, "Change"], csc) + _delta_td(m.loc[pr, "Usage"], usc)
-                   + _delta_td(m.loc[pr, "UsagePct"], pcs, pct=True) + oc_cells + "</tr>")
+    use_m = lots - chg_m
+    sc = {"p": max(float(lots.max().max()), 1.0), "pt": max(float(lots.sum(axis=1).max()), 1.0),
+          "c": max(float(chg_m.abs().max().max()), 1.0), "ct": max(float(chg_m.sum(axis=1).abs().max()), 1.0),
+          "u": max(float(use_m.abs().max().max()), 1.0), "ut": max(float(use_m.sum(axis=1).abs().max()), 1.0)}
+    out = ["<div class='mt' style='margin-bottom:4px'>Monthly (bags): Passed, change in certs and Usage (Passed minus certs change, "
+           "same day) for each origin. Total is the sum of the origin columns.</div>",
+           f"<div class='rwrap' style='height:{height}'>"]
+    out += _cg_head("Month", cols)
+    for pr in lots.index[::-1]:
+        out.append(_cg_row(pr.strftime("%b %Y"), lots.loc[pr], chg_m.loc[pr], use_m.loc[pr], cols, sc))
     return "".join(out) + "</tbody></table></div>"
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def kc_cg_daily_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, show_all: bool = False,
-                     height: str = "60vh") -> str:
+                     height: str = "72vh") -> str:
     days = pd.DatetimeIndex(days)
     p = kc_gr_wide(g, pd.Series(days), "Passed")
     d = kc_cg_daily(g, pd.Series(days), kc)
     chg_o = kc_origin_certs(kc).diff().reindex(days)
     cols, pp, cc = _cg_origin_split(p, chg_o, show_all)
-    mx, psc = max(float(pp.max().max()), 1.0), max(float(pp.sum(axis=1).max()), 1.0)
-    csc, usc = max(float(d["Change"].abs().max()), 1.0), max(float(d["Usage"].abs().max()), 1.0)
-    cmx = max(float(cc.abs().max().max()), 1.0)
-    out = ["<div class='mt' style='margin-bottom:4px'>Bags Passed by day and KC Certified Stocks change (bags), same day</div>",
-           "<div class='rwrap' style='height:", height, "'><table class='rpt cmp'><thead><tr class='h1'>",
-           f"<th class='dt' rowspan='2'>Date</th><th colspan='{len(cols) + 1}'>Bags Passed by Origin</th>",
-           "<th colspan='2' class='sep certs-hdr'>KC Certs</th>",
-           f"<th colspan='{len(cols)}' class='sep certs-hdr'>Certs Change by Origin</th></tr><tr class='h2'>"]
-    out += [f"<th>{o}</th>" for o in cols]
-    out += ["<th>Total</th><th class='sep certs-hdr'>Change</th><th class='certs-hdr'>Usage</th>"]
-    out += [f"<th class='certs-hdr{' sep' if i == 0 else ''}'>{o}</th>" for i, o in enumerate(cols)] + ["</tr></thead><tbody>"]
+    use = pp - cc
+    ok = cc.loc[cc.index.isin(d.index)]
+    sc = {"p": max(float(pp.max().max()), 1.0), "pt": max(float(pp.sum(axis=1).max()), 1.0),
+          "c": max(float(ok.abs().max().max()), 1.0), "ct": max(float(ok.sum(axis=1).abs().max()), 1.0),
+          "u": max(float(use.loc[ok.index].abs().max().max()), 1.0), "ut": max(float(use.loc[ok.index].sum(axis=1).abs().max()), 1.0)}
+    out = ["<div class='mt' style='margin-bottom:4px'>Daily (bags): Passed, change in certs and Usage (Passed minus certs change, "
+           "same day) for each origin. Total is the sum of the origin columns.</div>",
+           f"<div class='rwrap' style='height:{height}'>"]
+    out += _cg_head("Date", cols)
     for dt in days[::-1]:
-        has = dt in d.index
-        oc_cells = "".join(
-            (_chg_heat_td(cc.loc[dt, o], cmx) if has else "<td class='na'></td>").replace("<td", "<td class='sep'", 1) if i == 0
-            else (_chg_heat_td(cc.loc[dt, o], cmx) if has else "<td class='na'></td>") for i, o in enumerate(cols))
-        out.append(f"<tr><td class='d'>{dt.strftime('%d-%b-%y')}</td>"
-                   + "".join(_heat_td(pp.loc[dt, o], mx) for o in cols) + _bar_td(pp.loc[dt].sum(), psc)
-                   + (_delta_td(d.loc[dt, "Change"], csc, "cb sep") + _delta_td(d.loc[dt, "Usage"], usc)
-                      if has else "<td class='na sep'></td><td class='na'></td>") + oc_cells + "</tr>")
+        out.append(_cg_row(dt.strftime("%d-%b-%y"), pp.loc[dt], cc.loc[dt].fillna(0), use.loc[dt].fillna(0), cols, sc, dt in d.index))
     return "".join(out) + "</tbody></table></div>"
 
 
