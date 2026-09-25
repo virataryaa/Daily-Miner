@@ -1865,7 +1865,8 @@ def kc_gr_port_html(g: pd.DataFrame, days: pd.Series, tag: str, start: pd.Timest
 
 
 KC_PORT_COUNTRY = {"AN": "Belgium", "BA": "Spain", "HA": "Germany", "HO": "USA", "MI": "USA", "NO": "USA", "NY": "USA"}
-KC_COUNTRY_COLORS = {"Belgium": AMBER, "Spain": RED, "Germany": GREEN, "USA": TEAL}
+KC_COUNTRY_COLORS = {"Belgium": "#4a63a8", "Spain": "#4a63a8", "Germany": "#4a63a8", "USA": TEAL}  # header bands: Europe slate blue, USA teal
+KC_COUNTRY_CHART_COLORS = {"Belgium": NAVY, "Spain": "#6b7fb5", "Germany": "#8fa3d1", "USA": TEAL}
 KC_GROUP_START = {"BA": "gs", "HA": "gs", "HO": "sep"}  # Europe|USA gets the heavy divider
 
 
@@ -1912,7 +1913,7 @@ def kc_country_certs_fig(df: pd.DataFrame) -> go.Figure:
         cols = [f"KC-TOT-{p}" for p, ct in KC_PORT_COUNTRY.items() if ct == c and f"KC-TOT-{p}" in df.columns]
         y = df[cols].astype(float).ffill(limit=5).fillna(0).sum(axis=1)
         fig.add_trace(go.Scatter(x=df["Date"], y=y, mode="lines", name=c, stackgroup="one",
-                                 line=dict(width=0.6, color=KC_COUNTRY_COLORS[c]), fillcolor=KC_COUNTRY_COLORS[c],
+                                 line=dict(width=0.6, color=KC_COUNTRY_CHART_COLORS[c]), fillcolor=KC_COUNTRY_CHART_COLORS[c],
                                  hovertemplate="%{y:,.0f}<extra>" + c + "</extra>"))
     return chart_layout(fig, "Certs Per Country of Port")
 
