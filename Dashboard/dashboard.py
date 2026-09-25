@@ -429,13 +429,16 @@ def kc_ports_certs_fig(df: pd.DataFrame) -> go.Figure:
     minors = [p for p in KC_PORT_NAMES if p not in majors]
     fig = go.Figure()
     for p in majors:
+        # a few RICs go NaN for an isolated day here and there (a holiday the feed skipped);
+        # forward-fill short gaps rather than dropping to 0, or the stack shows a false one-day dip
+        y = df[f"KC-TOT-{p}"].astype(float).ffill(limit=5).fillna(0)
         fig.add_trace(go.Scatter(
-            x=df["Date"], y=df[f"KC-TOT-{p}"].astype(float).fillna(0), mode="lines", name=KC_PORT_NAMES[p],
+            x=df["Date"], y=y, mode="lines", name=KC_PORT_NAMES[p],
             stackgroup="one", line=dict(width=0.6, color=KC_PORT_COLORS.get(p, GREY)),
             fillcolor=KC_PORT_COLORS.get(p, GREY),
             hovertemplate="%{y:,.0f}<extra>" + KC_PORT_NAMES[p] + "</extra>"))
     if minors:
-        other = df[[f"KC-TOT-{p}" for p in minors]].astype(float).fillna(0).sum(axis=1)
+        other = df[[f"KC-TOT-{p}" for p in minors]].astype(float).ffill(limit=5).fillna(0).sum(axis=1)
         fig.add_trace(go.Scatter(x=df["Date"], y=other, mode="lines", name="Other", stackgroup="one",
                                  line=dict(width=0.6, color="#c5cbdd"), fillcolor="#c5cbdd",
                                  hovertemplate="%{y:,.0f}<extra>Other</extra>"))
@@ -451,17 +454,43 @@ def kc_origin_mix_fig(df: pd.DataFrame, show_all: bool = False, top_n: int = 5) 
     minors = [] if show_all else order[top_n:]
     fig = go.Figure()
     for o in shown:
+        # same isolated-holiday-NaN issue as the port chart: forward-fill short gaps, don't drop to 0
+        y = df[f"KC-{o}-TOT"].astype(float).ffill(limit=5).fillna(0)
         fig.add_trace(go.Scatter(
-            x=df["Date"], y=df[f"KC-{o}-TOT"].astype(float).fillna(0), mode="lines", name=KC_ORIGIN_NAMES[o],
+            x=df["Date"], y=y, mode="lines", name=KC_ORIGIN_NAMES[o],
             stackgroup="one", line=dict(width=0.6, color=colors[o]), fillcolor=colors[o],
             hovertemplate="%{y:,.0f}<extra>" + KC_ORIGIN_NAMES[o] + "</extra>"))
     if minors:
-        other = df[[f"KC-{o}-TOT" for o in minors]].astype(float).fillna(0).sum(axis=1)
+        other = df[[f"KC-{o}-TOT" for o in minors]].astype(float).ffill(limit=5).fillna(0).sum(axis=1)
         fig.add_trace(go.Scatter(x=df["Date"], y=other, mode="lines", name="Other", stackgroup="one",
                                  line=dict(width=0.6, color="#c5cbdd"), fillcolor="#c5cbdd",
                                  hovertemplate="%{y:,.0f}<extra>Other</extra>"))
     title = "Certs Per Origin" + ("" if show_all else f" (Top {top_n} + Other)")
     return chart_layout(fig, title)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_origin_share_fig(df: pd.DataFrame, show_all: bool = False, top_n: int = 5) -> go.Figure:
+    """Each origin's share of total certs (%) over time, as lines. Same Top-N + Other aggregation
+    as the mix chart above it."""
+    order, colors = kc_origin_palette(df)
+    shown = order if show_all else order[:top_n]
+    minors = [] if show_all else order[top_n:]
+    tot = df["KC-TOT-TOT"].astype(float).where(lambda v: v > 0)
+    fig = go.Figure()
+    for o in shown:
+        share = (df[f"KC-{o}-TOT"].astype(float).ffill(limit=5) / tot * 100)
+        ok = share.notna()
+        fig.add_trace(go.Scatter(x=df["Date"][ok], y=share[ok], mode="lines", name=KC_ORIGIN_NAMES[o],
+                                 line=dict(color=colors[o], width=2.0),
+                                 hovertemplate="%{y:.1f}%<extra>" + KC_ORIGIN_NAMES[o] + "</extra>"))
+    if minors:
+        other = df[[f"KC-{o}-TOT" for o in minors]].astype(float).ffill(limit=5).fillna(0).sum(axis=1) / tot * 100
+        fig.add_trace(go.Scatter(x=df["Date"], y=other, mode="lines", name="Other",
+                                 line=dict(color="#c5cbdd", width=2.0), hovertemplate="%{y:.1f}%<extra>Other</extra>"))
+    chart_layout(fig, "Origin Share of Total", height=360)
+    fig.update_layout(yaxis=dict(ticksuffix="%", range=[0, 100]))
+    return fig
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -513,17 +542,6 @@ def kc_rolling_origins_fig(df: pd.DataFrame, origins: list, n: int, start: pd.Ti
     return fig
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def kc_seasonality_options(df: pd.DataFrame) -> dict:
-    """Label -> column. Total first, then ports, then origins - each group biggest-first."""
-    opts = {"Total": "KC-TOT-TOT"}
-    for p in kc_major_ports(df):
-        opts[f"Port: {KC_PORT_NAMES[p]}"] = f"KC-TOT-{p}"
-    order, _ = kc_origin_palette(df)
-    for o in order:
-        if df[f"KC-{o}-TOT"].astype(float).mean() > 0:
-            opts[f"Origin: {KC_ORIGIN_NAMES[o]}"] = f"KC-{o}-TOT"
-    return opts
 
 
 HISTORY_YEARS = 2
@@ -1518,10 +1536,12 @@ if commodity == "Coffee":
                 st.markdown("<div class='sec'>Origin mix</div>", unsafe_allow_html=True)
                 show_all = st.radio("Origins shown", ["Top 5 + Other", "Show all origins"], horizontal=True,
                                     label_visibility="collapsed", key="ac_origin_all") == "Show all origins"
-                acm1, acm2 = st.columns(2)
+                acm1, acm2, acm3 = st.columns(3)
                 with acm1:
                     st.plotly_chart(kc_origin_mix_fig(acview, show_all=show_all), width="stretch", config=accfg)
                 with acm2:
+                    st.plotly_chart(kc_origin_share_fig(acview, show_all=show_all), width="stretch", config=accfg)
+                with acm3:
                     st.plotly_chart(kc_latest_breakup_fig(kc), width="stretch", config=accfg)
 
                 st.markdown("<div class='sec'>Momentum</div>", unsafe_allow_html=True)
@@ -1533,7 +1553,7 @@ if commodity == "Coffee":
                 with aco2:
                     ac_order, _ = kc_origin_palette(kc)
                     ac_origin_opts = {KC_ORIGIN_NAMES[o]: o for o in ac_order}
-                    ac_roll_pick = st.multiselect("Rolling origins", list(ac_origin_opts), default=list(ac_origin_opts)[:1],
+                    ac_roll_pick = st.multiselect("Rolling origins", list(ac_origin_opts), default=["Brazil"],
                                                   key="ac_roll_origins", label_visibility="collapsed",
                                                   placeholder="Choose origins")
                 acr1, acr2 = st.columns(2)
@@ -1546,16 +1566,32 @@ if commodity == "Coffee":
                                     width="stretch", config=accfg)
 
             else:
-                as_opts = kc_seasonality_options(kc)
+                ac_order, _ = kc_origin_palette(kc)
+                as_origin_opts = ["Total"] + [KC_ORIGIN_NAMES[o] for o in ac_order]
+                as_port_opts = ["Total"] + [KC_PORT_NAMES[p] for p in kc_major_ports(kc)]
+                port_name_to_code = {v: k for k, v in KC_PORT_NAMES.items()}
+                origin_name_to_code = {v: k for k, v in KC_ORIGIN_NAMES.items()}
+
+                as_f1, as_f2, _ = st.columns([1, 1, 3])
+                with as_f1:
+                    as_origin_pick = st.selectbox("Origin", as_origin_opts,
+                                                  index=as_origin_opts.index("Brazil"), key="ac_season_origin")
+                with as_f2:
+                    as_port_pick = st.selectbox("Port", as_port_opts,
+                                                index=as_port_opts.index("ANT"), key="ac_season_port")
+                as_o_code = "TOT" if as_origin_pick == "Total" else origin_name_to_code[as_origin_pick]
+                as_p_code = "TOT" if as_port_pick == "Total" else port_name_to_code[as_port_pick]
+                as_col = f"KC-{as_o_code}-{as_p_code}"
+                as_label = f"{as_origin_pick} - {as_port_pick}"
+
                 as_left, as_right = st.columns([2, 3])
                 with as_left:
-                    as_pick = st.selectbox("Seasonality", list(as_opts), key="ac_season_view")
-                    st.plotly_chart(seasonality_fig(kc, as_opts[as_pick], f"Seasonality: {as_pick}"),
+                    st.plotly_chart(seasonality_fig(kc, as_col, f"Seasonality: {as_label}"),
                                     width="stretch", config={"displayModeBar": False})
                 with as_right:
-                    st.markdown(f"<div class='mt side'>Monthly Change: {as_pick}</div>", unsafe_allow_html=True)
-                    st.markdown(monthly_change_html(kc, as_opts[as_pick]), unsafe_allow_html=True)
-                as_chg_all = kc.set_index("Date")[as_opts[as_pick]].dropna().astype(float).diff().dropna()
+                    st.markdown(f"<div class='mt side'>Monthly Change: {as_label}</div>", unsafe_allow_html=True)
+                    st.markdown(monthly_change_html(kc, as_col), unsafe_allow_html=True)
+                as_chg_all = kc.set_index("Date")[as_col].dropna().astype(float).diff().dropna()
                 st.markdown("<div style='height:36px'></div>", unsafe_allow_html=True)
                 _asl, asd, _asr = st.columns([1, 2, 1])
                 with asd:
@@ -1568,7 +1604,7 @@ if commodity == "Coffee":
                         as_chg = as_chg_all[as_chg_all.index >= as_last_dt - pd.DateOffset(years=5)]
                     else:
                         as_chg = as_chg_all[as_chg_all.index >= DIST_START]
-                    st.plotly_chart(distribution_fig(as_chg, f"Daily Change Distribution: {as_pick}", "chg"),
+                    st.plotly_chart(distribution_fig(as_chg, f"Daily Change Distribution: {as_label}", "chg"),
                                     width="stretch", config={"displayModeBar": False})
 
         elif ar_section == "Grading":
