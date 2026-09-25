@@ -1794,20 +1794,29 @@ def kc_gr_month_pf(g: pd.DataFrame, days: pd.Series, origin: str, port: str) -> 
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def kc_gr_rate_line_fig(mf: pd.DataFrame, title: str, height: int = 320) -> go.Figure:
-    tot = (mf["Passed"] + mf["Failed"]).replace(0, np.nan)
-    rate = mf["Passed"] / tot * 100
-    xs = mf.index
+def kc_gr_rate_bar_fig(df: pd.DataFrame, title: str, start: pd.Timestamp, end: pd.Timestamp,
+                       height: int = 380) -> go.Figure:
+    """Pass rate per grading day as bars, labelled with the bags passed that day. Only days with
+    grading are drawn (a day with nothing graded has no rate)."""
+    d = df[(df.index >= start) & (df.index <= end)]
+    d = d[(d["Passed"] + d["Failed"]) > 0]
+    rate = d["Passed"] / (d["Passed"] + d["Failed"]) * 100
+    tot_p, tot_f = float(d["Passed"].sum()), float(d["Failed"].sum())
+    avg = tot_p / (tot_p + tot_f) * 100 if tot_p + tot_f else 0.0
+    xs = d.index.strftime("%d %b %y")
     fig = go.Figure()
-    avg = float(mf["Passed"].sum() / max(mf["Passed"].sum() + mf["Failed"].sum(), 1) * 100)
-    fig.add_hline(y=avg, line=dict(color=GREY, width=1, dash="dot"),
-                  annotation_text=f"Overall {avg:.0f}%", annotation_position="top left",
-                  annotation_font=dict(size=10, color=GREY))
-    fig.add_trace(go.Scatter(x=xs, y=rate, mode="lines+markers", line=dict(color=NAVY, width=1.6),
-                             marker=dict(size=4, color=NAVY), connectgaps=True,
-                             hovertemplate="%{y:.1f}%<extra>Pass rate</extra>"))
+    fig.add_trace(go.Bar(x=xs, y=rate, marker_color=NAVY, text=[f"{v:,.0f}" for v in d["Passed"]],
+                         textposition="outside", textangle=-90, textfont=dict(size=10, color="#1a1a2e"),
+                         cliponaxis=False, customdata=np.stack([d["Passed"], d["Failed"]], axis=-1),
+                         hovertemplate="%{y:.1f}%<br>Passed %{customdata[0]:,.0f} | Failed %{customdata[1]:,.0f}<extra></extra>"))
+    if len(d):
+        fig.add_hline(y=avg, line=dict(color=GREY, width=1, dash="dot"),
+                      annotation_text=f"Period {avg:.0f}%", annotation_position="top left",
+                      annotation_font=dict(size=10, color=GREY))
     chart_layout(fig, title, height)
-    fig.update_layout(yaxis=dict(ticksuffix="%", range=[0, 102]), showlegend=False)
+    fig.update_layout(bargap=0.25, showlegend=False, margin=dict(t=48, b=8, l=8, r=8),
+                      xaxis=dict(type="category", tickangle=-90, tickfont=dict(size=9)),
+                      yaxis=dict(ticksuffix="%", range=[0, 122], tickvals=[0, 20, 40, 60, 80, 100]))
     return fig
 
 
@@ -2364,8 +2373,25 @@ if commodity == "Coffee":
                                         label_visibility="collapsed", key="arr_port")
                 mf = kc_gr_month_pf(g, gdays, r_or, r_po)
                 lbl = f"{r_or} at {r_po}"
-                st.plotly_chart(kc_gr_rate_line_fig(kc_gr_day_pf(g, gdays, r_or, r_po),
-                                                    f"Pass Rate by Day | {lbl} (days with grading)"),
+                rs1, _ = st.columns([2.6, 4])
+                with rs1:
+                    r_span = st.radio("Pass rate period", ["3M", "6M", "1Y", "All", "Custom"], index=0, horizontal=True,
+                                      label_visibility="collapsed", key="arr_span")
+                if r_span == "Custom":
+                    rc1, rc2, _ = st.columns([1, 1, 4])
+                    with rc1:
+                        r_from = st.date_input("Start date", value=(g_max - pd.DateOffset(months=3)).date(),
+                                               min_value=g_min.date(), max_value=g_max.date(), key="arr_from")
+                    with rc2:
+                        r_to = st.date_input("End date", value=g_max.date(), min_value=g_min.date(),
+                                             max_value=g_max.date(), key="arr_to")
+                    rs_, re_ = pd.Timestamp(r_from), pd.Timestamp(r_to)
+                elif r_span == "All":
+                    rs_, re_ = g_min, g_max
+                else:
+                    rs_, re_ = g_max - pd.DateOffset(months={"3M": 3, "6M": 6, "1Y": 12}[r_span]), g_max
+                st.plotly_chart(kc_gr_rate_bar_fig(kc_gr_day_pf(g, gdays, r_or, r_po),
+                                                   f"Pass Rate by Day | {lbl} (label = bags passed)", rs_, re_),
                                 width="stretch", config=gcfg)
                 st.plotly_chart(kc_gr_pf_bars_fig(mf, f"Passed / Failed Bags by Month | {lbl}"),
                                 width="stretch", config=gcfg)
