@@ -1156,8 +1156,12 @@ if commodity == "Coffee":
             if rcg_view == "Data Table":
                 st.markdown(monthly_grading_certs_html(gr, certs), unsafe_allow_html=True)
                 st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-                lag_pick = st.radio("Certs lag", ["0d", "1d", "2d", "3d"], index=1, horizontal=True,
-                                    label_visibility="collapsed", key="rcg_lag")
+                _lag_l, _lag_r = st.columns([5, 1])
+                with _lag_r:
+                    st.markdown("<div class='sb-label' style='margin:0 0 2px;text-align:right'>LRC Certs lag</div>",
+                               unsafe_allow_html=True)
+                    lag_pick = st.radio("Certs lag", ["0d", "1d"], index=1, horizontal=True,
+                                        label_visibility="collapsed", key="rcg_lag")
                 st.markdown(daily_grading_certs_html(gr, certs, lag=int(lag_pick[0])), unsafe_allow_html=True)
             else:
                 st.markdown("<div class='card-desc'>Coming next.</div>", unsafe_allow_html=True)
