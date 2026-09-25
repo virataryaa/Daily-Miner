@@ -2365,8 +2365,6 @@ def rc_comp_html(gr: pd.DataFrame, certs: pd.DataFrame, monthly: bool, show_all:
 
     lp, cp, up = cols_of(lots_p), cols_of(chg_p), cols_of(use_p)
     pcols = list(cp.columns)
-    pct = ten_o / lots_o.replace(0, np.nan) * 100
-    pct["Total"] = ten_o.sum(axis=1) / lots_o.sum(axis=1).replace(0, np.nan) * 100
 
     groups = []
     for p in pcols:
@@ -2380,20 +2378,18 @@ def rc_comp_html(gr: pd.DataFrame, certs: pd.DataFrame, monthly: bool, show_all:
     edge = "border-left:2px solid #0a2463;"
     h = ["<table class='rpt cmp tiny'><thead><tr class='h1'>",
          f"<th class='dt' rowspan='3'>{'Month' if monthly else 'Date'}</th>",
-         f"<th colspan='{no}'>Lots Graded by Origin</th>", f"<th colspan='{no}' class='sep'>Pass % (Tenderable Y / all)</th>",
+         f"<th colspan='{no}'>Lots Graded by Origin</th>", f"<th colspan='{npn}' class='sep'>Lots Graded by Port</th>",
          f"<th colspan='{npn}' class='sep certs-hdr'>Certs Change by Port (1-day lag)</th>",
          f"<th colspan='{npn}' class='sep certs-hdr'>Usage by Port (1-day lag)</th>",
          "<th colspan='1' class='sep certs-hdr'>Certs</th><th colspan='2' class='sep'>Price</th></tr><tr class='h2'>"]
     h += [f"<th rowspan='2'>{o}</th>" for o in RC_ORIGINS] + ["<th rowspan='2'>Total</th>"]
-    h += [f"<th rowspan='2' class='pr{' sep' if i == 0 else ''}'>{RC_ORIGIN_ABBR[o]}</th>" for i, o in enumerate(RC_ORIGINS)]
-    h += ["<th rowspan='2' class='pr'>Tot</th>"]
-    for gi in range(2):
+    for gi in range(3):
         for i, (ct, k) in enumerate(groups):
             e = edge if (i == 0) else "border-left:2px solid #ffffff;"
             h.append(f"<th colspan='{k}' style='background:{_rc_band(ct)};{e}letter-spacing:.06em;text-transform:uppercase'>{ct}</th>")
-        h.append("<th rowspan='2' class='certs-hdr'>Total</th>")
+        h.append(f"<th rowspan='2'{' class=certs-hdr' if gi else ''}>Total</th>")
     h += ["<th rowspan='2' class='certs-hdr sep'>Level</th><th rowspan='2' class='sep'>LRC</th><th rowspan='2'>Chg</th></tr><tr class='h3'>"]
-    for gi in range(2):
+    for gi in range(3):
         k = 0
         for i, (ct, kk) in enumerate(groups):
             for j in range(kk):
@@ -2403,6 +2399,7 @@ def rc_comp_html(gr: pd.DataFrame, certs: pd.DataFrame, monthly: bool, show_all:
     h.append("</tr></thead><tbody>")
 
     mx = {"l": max(float(lots_o.max().max()), 1.0), "lt": max(float(lots_o.sum(axis=1).max()), 1.0),
+          "lp": max(float(lp.max().max()), 1.0),
           "c": max(float(cp.abs().max().max()), 1.0), "ct": max(float(chg_t.abs().max()), 1.0),
           "u": max(float(up.abs().max().max()), 1.0), "ut": max(float(use_t.abs().max()), 1.0),
           "pc": max(float(price_chg.abs().max()), 1.0)}
@@ -2413,7 +2410,9 @@ def rc_comp_html(gr: pd.DataFrame, certs: pd.DataFrame, monthly: bool, show_all:
         lab = k.strftime("%b %Y") if monthly else k.strftime("%d-%b-%y")
         r = [f"<tr><td class='d'>{lab}</td>"]
         r += [_heat_td(lots_o.loc[k, o], mx["l"]) for o in RC_ORIGINS] + [_bar_td(lots_o.loc[k].sum(), mx["lt"])]
-        r += [_rate_td(pct.loc[k, o], i == 0) for i, o in enumerate(RC_ORIGINS)] + [_rate_td(pct.loc[k, "Total"])]
+        pcells = [_heat_td(lp.loc[k, p], mx["lp"]) for p in pcols]
+        pcells[0] = pcells[0].replace("<td", "<td class='sep'", 1)
+        r += pcells + [_bar_td(lp.loc[k].sum(), mx["lt"])]
         for grp, tot_v, sc_i, sc_t in ((cp, chg_t, "c", "ct"), (up, use_t, "u", "ut")):
             cells = [_chg_heat_td(grp.loc[k, p], mx[sc_i]) for p in pcols]
             cells[0] = cells[0].replace("<td", "<td class='sep'", 1)
