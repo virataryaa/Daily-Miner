@@ -28,6 +28,7 @@ RC_PL = ROOT / "Database" / "Main" / "RC" / "price_link_rc.parquet"   # Robusta:
 EOM_XLS = ROOT / "Database" / "Archive" / "KC" / "EOM_KC_cert_stox_by_port_nov96-present.xls"
 LSEG_DIR = Path(r"C:\Users\virat.arya\ETG\SoftsDatabase - Documents\Database\Hardmine\LSEG")
 ROLLEX = LSEG_DIR / "Rollex" / "Database" / "rollex_KC.parquet"
+ROLLEX_RC = LSEG_DIR / "Rollex" / "Database" / "rollex_RC.parquet"
 FUT = LSEG_DIR / "Arb" / "Database" / "kc_futures.parquet"
 START = "1979-11-26"
 OVERLAP_DAYS = 45
@@ -138,5 +139,8 @@ if __name__ == "__main__":
     else:
         rc = pull_c1c2(a.full, "LRC", RC_PL, "2008-01-01")
     rc["spread_c12"] = rc["c1"] - rc["c2"]
+    rx_rc = pd.read_parquet(ROLLEX_RC)[["rollex_px"]]
+    rx_rc.index = pd.to_datetime(rx_rc.index)
+    rc = rc.drop(columns=["rollex_px"], errors="ignore").join(rx_rc, how="left")   # roll-adjusted price, for clean returns
     rc.to_parquet(RC_PL)
     print(f"price_link_rc: {len(rc):,} rows {rc.index.min().date()} -> {rc.index.max().date()}")
