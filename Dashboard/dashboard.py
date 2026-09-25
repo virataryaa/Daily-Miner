@@ -77,6 +77,14 @@ div[role="radiogroup"] label:has(input:checked) div[data-testid="stMarkdownConta
    (a real st.tabs renders every tab's body on every rerun; this radio does not). */
 .st-key-rc_section_box div[role="radiogroup"] label { padding: 6px 16px !important; }
 .st-key-rc_section_box div[role="radiogroup"] label p { font-size: 14px !important; }
+
+/* Top-level commodity-section tabs (Arabica/Robusta): deep royal red instead of the navy every
+   other pill uses, so this one level stands out as the primary switch. */
+.st-key-coffee_section_box div[role="radiogroup"] label:has(input:checked) { background: #8e1b3a !important; }
+
+/* Arabica Matrix: the two side-by-side tables sit right next to each other */
+.st-key-ar_matrices_row [data-testid="stHorizontalBlock"] { gap: 0.5rem !important; }
+.st-key-ar_matrices_row { gap: 0.5rem !important; }
 .st-key-rc_view_box div[role="radiogroup"] label, .st-key-rg_view_box div[role="radiogroup"] label { padding: 4px 13px !important; }
 .st-key-rc_view_box div[role="radiogroup"] label p, .st-key-rg_view_box div[role="radiogroup"] label p { font-size: 13px !important; }
 .st-key-rcg_lag_box div[role="radiogroup"] { padding: 2px; }
@@ -1309,9 +1317,11 @@ if commodity == "Coffee":
                                                     key="ar_latest", label_visibility="collapsed")
                 older_ts, latest_ts = pd.Timestamp(older_pick), pd.Timestamp(latest_pick)
             st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-            mx_chg, mx_latest = st.columns(2)
+            mx_row = st.container(key="ar_matrices_row")
+            mx_chg, mx_latest = mx_row.columns(2, gap="small")
             with mx_chg:
-                st.markdown("<div class='mt'>Certified Stocks Change (bags)</div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='mt'>Certified Stocks Change ({older_ts.strftime('%d %b %Y')} "
+                           f"&rarr; {latest_ts.strftime('%d %b %Y')}, bags)</div>", unsafe_allow_html=True)
                 st.markdown(kc_change_matrix_html(kc, older_ts, latest_ts), unsafe_allow_html=True)
             with mx_latest:
                 st.markdown(f"<div class='mt'>Latest Certified Stocks ({latest_ts.strftime('%d %b %Y')}, bags)</div>",
