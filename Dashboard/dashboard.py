@@ -777,60 +777,9 @@ def _cumulative_bands_fig(s: pd.Series, title: str, m: int, first: pd.Timestamp,
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def usage_cumulative_fig(daily_usage: pd.Series, first: pd.Timestamp, last: pd.Timestamp,
-                         height: int = 360) -> go.Figure:
-    """Cumulative Usage (Grading - Certs change), year to date, resetting 1 January."""
-    return _cumulative_bands_fig(daily_usage, "Cumulative Usage (YTD)", 1, first, last, height)
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def usage_daily_fig(daily_usage: pd.Series, height: int = 360) -> go.Figure:
-    """Daily Usage, navy line."""
-    s = daily_usage.dropna()
-    fig = go.Figure(go.Scatter(x=s.index, y=s.values, mode="lines", line=dict(color=NAVY, width=1.4),
-                               hovertemplate="%{y:+,.0f}<extra></extra>"))
-    fig.add_hline(y=0, line=dict(color="#c5cbdd", width=1))
-    chart_layout(fig, "Daily Usage", height)
-    fig.update_layout(yaxis=dict(tickformat="+,"))
-    return fig
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def usage_seasonality_fig(daily_usage: pd.Series, height: int = 440) -> go.Figure:
-    """Day-of-year seasonality of daily Usage (not cumulative): history bands, average,
-    last year red, current year navy."""
-    return _dayofyear_bands_fig(daily_usage, "Daily Usage Seasonality", height)
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def monthly_usage_html(daily_usage: pd.Series, height: str = "auto") -> str:
-    """Year x month matrix of total Usage per month, signed bars, YEAR total column."""
-    tbl = daily_usage.groupby([daily_usage.index.year, daily_usage.index.month]).sum().unstack()
-    tbl = tbl.reindex(columns=range(1, 13))
-    year_tot = tbl.sum(axis=1, min_count=1)
-    scale = max(tbl.abs().max().max(), 1)
-    yscale = max(year_tot.abs().max(), 1)
-
-    def cell(v, sc, cls="cb"):
-        if pd.isna(v):
-            return "<td class='na'></td>"
-        v = int(round(v))
-        if v == 0:
-            return f"<td class='{cls}'><span></span></td>"
-        w = abs(v) / sc * 50
-        bar = f"<i class='{'up' if v > 0 else 'dn'}' style='width:{w:.1f}%'></i>"
-        return f"<td class='{cls}'>{bar}<span class='{'pos' if v > 0 else 'neg'}'>{v:+,}</span></td>"
-
-    months_u = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
-    out = [f"<div class='rwrap' style='height:{height}'><table class='rpt mx'><thead><tr class='h2'><th class='dt'>Year</th>"]
-    out += [f"<th>{m}</th>" for m in months_u] + ["<th class='sep'>Year</th></tr></thead><tbody>"]
-    for yr in tbl.index:
-        row = [f"<tr><td class='d'>{yr}</td>"]
-        row += [cell(tbl.loc[yr, m], scale) for m in range(1, 13)]
-        row.append(cell(year_tot[yr], yscale, "cb sep"))
-        row.append("</tr>")
-        out.append("".join(row))
-    out.append("</tbody></table></div>")
-    return "".join(out)
+                         m: int = 1, height: int = 360) -> go.Figure:
+    """Cumulative Usage (Grading - Certs change), resetting on the 1st of month m."""
+    return _cumulative_bands_fig(daily_usage, "Cumulative Usage", m, first, last, height)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -1217,7 +1166,7 @@ if commodity == "Coffee":
         elif rc_section == "Grading":
             gr = load_rc_grading()
             with st.container(key="rc_view_box"):
-                rg_view = st.radio("View", ["Data Table", "Visuals", "Seasonality & Distribution"], horizontal=True,
+                rg_view = st.radio("View", ["Data Table", "Visuals", "Cumulative & Seasonals"], horizontal=True,
                                    label_visibility="collapsed", key="rg_view")
             st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
@@ -1269,9 +1218,11 @@ if commodity == "Coffee":
                                                              crop_m, g_first, g_last),
                                         width="stretch", config=gcfg2)
                 with q4:
-                    other_pick = st.selectbox("Other origin", rest, key="rg_other_origin", label_visibility="collapsed")
-                    st.plotly_chart(crop_seasonality_fig(gr[gr["OriginName"] == other_pick],
-                                                         f"{other_pick} | cumulative lots", crop_m, g_first, g_last),
+                    other_pick = st.selectbox("Other origin", ["Total Grading"] + rest, index=0,
+                                              key="rg_other_origin", label_visibility="collapsed")
+                    other_sel = gr if other_pick == "Total Grading" else gr[gr["OriginName"] == other_pick]
+                    st.plotly_chart(crop_seasonality_fig(other_sel, f"{other_pick} | cumulative lots",
+                                                         crop_m, g_first, g_last),
                                     width="stretch", config=gcfg2)
 
                 st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
@@ -1299,7 +1250,7 @@ if commodity == "Coffee":
             certs = load_rc_certs()
             gr = load_rc_grading()
             with st.container(key="rc_view_box"):
-                rcg_view = st.radio("View", ["Data Table", "Visuals", "Seasonality & Distribution"], horizontal=True,
+                rcg_view = st.radio("View", ["Data Table", "Visuals"], horizontal=True,
                                     label_visibility="collapsed", key="rcg_view")
             st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
@@ -1314,30 +1265,22 @@ if commodity == "Coffee":
                         lag_pick = st.radio("Certs lag", ["0d", "1d"], index=1, horizontal=True,
                                             label_visibility="collapsed", key="rcg_lag")
                 st.markdown(daily_grading_certs_html(gr, certs, lag=int(lag_pick[0])), unsafe_allow_html=True)
-            elif rcg_view == "Visuals":
-                du = daily_usage_series(gr, certs)
-                u_min, u_max = du.index.min(), du.index.max()
-                ucfg = {"displayModeBar": False}
-                u1, u2 = st.columns(2)
-                with u1:
-                    st.plotly_chart(usage_daily_fig(du), width="stretch", config=ucfg)
-                with u2:
-                    st.plotly_chart(usage_cumulative_fig(du, u_min, u_max), width="stretch", config=ucfg)
-                st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
-                st.plotly_chart(usage_by_origin_fig(gr, certs), width="stretch", config=ucfg)
             else:
                 du = daily_usage_series(gr, certs)
-                scfg = {"displayModeBar": False}
-                s1, s2 = st.columns([2, 3])
-                with s1:
-                    st.plotly_chart(usage_seasonality_fig(du), width="stretch", config=scfg)
-                with s2:
-                    st.markdown("<div class='mt side'>Monthly Usage</div>", unsafe_allow_html=True)
-                    st.markdown(monthly_usage_html(du), unsafe_allow_html=True)
-                st.markdown("<div style='height:36px'></div>", unsafe_allow_html=True)
-                _dl, dd, _dr = st.columns([1, 2, 1])
-                with dd:
-                    st.plotly_chart(distribution_fig(du, "Daily Usage Distribution", "chg"),
-                                    width="stretch", config=scfg)
+                u_min, u_max = du.index.min(), du.index.max()
+                g_first, g_last = gr["PanelDate"].min(), gr["PanelDate"].max()
+                ucfg = {"displayModeBar": False}
+                ucm_col, _ = st.columns([1, 5])
+                with ucm_col:
+                    ucm_pick = st.selectbox("Cumulative starts", MONTH_ABBR, index=9, key="rcg_crop_m")
+                ucm = MONTH_ABBR.index(ucm_pick) + 1
+                u1, u2 = st.columns(2)
+                with u1:
+                    st.plotly_chart(usage_cumulative_fig(du, u_min, u_max, ucm), width="stretch", config=ucfg)
+                with u2:
+                    st.plotly_chart(crop_seasonality_fig(gr, "Cumulative Total Grading", ucm, g_first, g_last),
+                                    width="stretch", config=ucfg)
+                st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+                st.plotly_chart(usage_by_origin_fig(gr, certs), width="stretch", config=ucfg)
 else:
     st.markdown(f"<div class='card-desc'>{commodity}: not built yet.</div>", unsafe_allow_html=True)
