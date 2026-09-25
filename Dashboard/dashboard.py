@@ -123,8 +123,8 @@ span[data-baseweb="tag"] svg { fill: #ffffff !important; }
 .rpt thead th.gs { border-left: 1px solid rgba(255,255,255,.28); }
 .rpt.static thead th { position: static; }  /* small non-scrolling tables: avoid a sticky-header/first-row overlap quirk */
 /* KC matrices: fixed column widths so the Change and Latest tables line up when shown side by side */
-.rpt.kcmx th.dt.l, .rpt.kcmx td.d.l { min-width: 116px; }
-.rpt.kcmx th:not(.dt), .rpt.kcmx td:not(.d) { min-width: 58px; }
+.rpt.kcmx { font-size: 10.5px; }
+.rpt.kcmx th, .rpt.kcmx td { padding: 3px 6px; }
 
 /* Compact date pickers for the Older/Latest Date row */
 .st-key-ar_dates_box input { padding: 4px 8px !important; font-size: 12px !important; height: auto !important; }
