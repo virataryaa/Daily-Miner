@@ -2054,6 +2054,15 @@ def kc_cg_daily_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, show_al
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
+def kc_cg_usage_origin(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame) -> pd.DataFrame:
+    """Daily Usage per origin (same day): the origin's Passed minus the change in that origin's own certs."""
+    d = kc_cg_daily(g, pd.Series(days), kc)
+    oc = kc_origin_certs(kc)
+    p = kc_gr_wide(g, pd.Series(days), "Passed").reindex(d.index).reindex(columns=oc.columns, fill_value=0).fillna(0)
+    return p - oc.diff().reindex(d.index)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def kc_usage_by_origin_fig(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, show_all: bool,
                            top_n: int = 5, height: int = 380) -> go.Figure:
     """Monthly Usage per origin: each origin's Passed minus the change in that origin's own certs."""
@@ -2448,7 +2457,7 @@ if commodity == "Coffee":
 
             elif ar_cg_view == "Visuals":
                 du = kc_cg_daily(g, gdays, kc)
-                ucm_col, uo_col, _ = st.columns([1, 2, 3])
+                ucm_col, uf_col, uo_col, _ = st.columns([1, 1.4, 2, 2])
                 with ucm_col:
                     st.markdown("<div class='sb-label' style='margin:0 0 2px'>Cumulative starts</div>", unsafe_allow_html=True)
                     ucm = MONTH_ABBR.index(st.selectbox("Cumulative starts", MONTH_ABBR, index=6,
@@ -2457,13 +2466,18 @@ if commodity == "Coffee":
                     st.markdown("<div class='sb-label' style='margin:0 0 2px'>Usage by origin</div>", unsafe_allow_html=True)
                     u_all = st.radio("Usage origins", ["Top 5 + Other", "Show all origins"], horizontal=True,
                                      label_visibility="collapsed", key="acg_origin_all")
-                u1, u2 = st.columns(2)
-                with u1:
-                    st.plotly_chart(kc_cum_lines_cached(du["Usage"], "Cumulative Usage (Passed - certs change)", ucm, gdays.max()),
-                                    width="stretch", config=ucfg)
-                with u2:
-                    st.plotly_chart(kc_cum_lines_cached(kc_gr_wide(g, gdays, "Passed").sum(axis=1), "Cumulative Total Passed",
-                                                        ucm, gdays.max()), width="stretch", config=ucfg)
+                uo = kc_cg_usage_origin(g, gdays, kc)
+                u_order = list(uo.sum().sort_values(ascending=False).index)
+                with uf_col:
+                    st.markdown("<div class='sb-label' style='margin:0 0 2px'>Fourth chart origin</div>", unsafe_allow_html=True)
+                    u_fourth = st.selectbox("Fourth chart", ["Total"] + u_order[3:], index=0,
+                                            label_visibility="collapsed", key="acg_fourth")
+                uq = st.columns(4)
+                for col_, o in zip(uq, u_order[:3] + [u_fourth]):
+                    with col_:
+                        ser = du["Usage"] if o == "Total" else uo[o]
+                        st.plotly_chart(kc_cum_lines_cached(ser, f"{o} | cumulative usage", ucm, gdays.max()),
+                                        width="stretch", config=ucfg)
                 st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
                 st.plotly_chart(kc_usage_by_origin_fig(g, gdays, kc, u_all == "Show all origins"),
                                 width="stretch", config=ucfg)
