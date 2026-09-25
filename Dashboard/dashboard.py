@@ -1917,13 +1917,39 @@ def kc_queue_frame(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame) -> pd.Dat
     return pd.DataFrame({"Failed": f, "Pending": pend, "Certs": tot.reindex(days), "Fresh": pend.diff() + p + f})
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_fresh_frame(g: pd.DataFrame, days: pd.Series, by: str) -> pd.DataFrame:
+    """Fresh Pending per origin (or port) per reported day = change in that Pending stock + Passed + Failed."""
+    days = pd.Series(days)
+    pend = kc_gr_wide(g, days, "Pending", by=by)
+    pas = kc_gr_wide(g, days, "Passed", by=by)
+    fail = kc_gr_wide(g, days, "Failed", by=by)
+    cols = sorted(set(pend.columns) | set(pas.columns) | set(fail.columns))
+    pend, pas, fail = (x.reindex(columns=cols, fill_value=0) for x in (pend, pas, fail))
+    return pend.diff() + pas + fail
+
+
+def _fresh_cols(fr_all: pd.DataFrame, cols: list) -> pd.DataFrame:
+    """Fresh Pending on the table's columns (Other = everything not shown) plus an exact Total."""
+    shown = [c for c in cols if c != "Other"]
+    out = fr_all.reindex(columns=shown, fill_value=0).copy()
+    if "Other" in cols:
+        out["Other"] = fr_all.drop(columns=[c for c in shown if c in fr_all.columns]).sum(axis=1)
+    out["Total"] = fr_all.sum(axis=1)
+    return out
+
+
+def _fresh_td(v, mx: float, sep: bool = False) -> str:
+    return _heat_td(v, mx).replace("<td", "<td class='pr sep'" if sep else "<td class='pr'", 1)
+
+
 def _cg_queue_cells(q, sc: dict) -> str:
-    """Grading Queue group: Pending | Certs level | Fresh Pending."""
+    """Grading Queue group: Pending stock | Certs level."""
     if q is None:
-        return "<td class='na sep'></td><td class='na'></td><td class='na'></td>"
+        return "<td class='na sep'></td><td class='na'></td>"
     pend = "" if pd.isna(q["Pending"]) or not q["Pending"] else _fmt_i(q["Pending"])
     cert = "" if pd.isna(q["Certs"]) else _fmt_i(q["Certs"])
-    return (f"<td class='sep'>{pend}</td><td class='tot'>{cert}</td>" + _heat_td(q["Fresh"], sc["qfp"]))
+    return f"<td class='sep'>{pend}</td><td class='tot'>{cert}</td>"
 
 
 def _queue_scales(q: pd.DataFrame) -> dict:
@@ -1941,7 +1967,8 @@ def _cg_head(first_col: str, cols: list, with_rate: bool = False, with_queue: bo
     h += [f"<th colspan='{n}' class='sep certs-hdr'>Certs Change by Origin</th>",
           f"<th colspan='{n}' class='sep certs-hdr'>Usage by Origin</th>"]
     if with_queue:
-        h.append("<th colspan='3' class='sep'>Grading Queue</th>")
+        h.append(f"<th colspan='{n}' class='sep'>Fresh Pending by Origin</th>")
+        h.append("<th colspan='2' class='sep'>Grading Queue</th>")
     h.append("</tr><tr class='h2'>")
     groups = 4 if with_rate else 3
     for grp in range(groups):
@@ -1953,7 +1980,10 @@ def _cg_head(first_col: str, cols: list, with_rate: bool = False, with_queue: bo
             lbl = (_ABBR.get(o, o[:3].upper()) if o != "Total" else "Tot") if is_pr else o
             h.append(f"<th class='{cls.strip()}'>{lbl}</th>" if cls.strip() else f"<th>{lbl}</th>")
     if with_queue:
-        h.append("<th class='sep'>Pending</th><th>Certs</th><th>Fresh Pending</th>")
+        for i, o in enumerate(cols + ["Total"]):
+            lbl = _ABBR.get(o, o[:3].upper()) if o != "Total" else "Tot"
+            h.append(f"<th class='pr{' sep' if i == 0 else ''}'>{lbl}</th>")
+        h.append("<th class='sep'>Pending</th><th>Certs</th>")
     h.append("</tr></thead><tbody>")
     return h
 
@@ -1967,7 +1997,7 @@ def _rate_td(v, sep: bool = False) -> str:
 
 
 def _cg_row(label: str, pas: pd.Series, chg: pd.Series, use: pd.Series, cols: list, sc: dict, has: bool = True,
-            rate: pd.Series = None, queue=None, with_queue: bool = False) -> str:
+            rate: pd.Series = None, queue=None, with_queue: bool = False, fresh: pd.Series = None) -> str:
     """One data row: Passed cells, (Pass % cells), Certs-change cells, Usage cells (origins then a Total each)."""
     r = [f"<tr><td class='d'>{label}</td>"]
     r += [_heat_td(pas[o], sc["p"]) for o in cols] + [_bar_td(pas.sum(), sc["pt"])]
@@ -1981,6 +2011,8 @@ def _cg_row(label: str, pas: pd.Series, chg: pd.Series, use: pd.Series, cols: li
     else:
         r += ["<td class='na sep'></td>"] + ["<td class='na'></td>"] * len(cols) + ["<td class='na sep'></td>"] + ["<td class='na'></td>"] * len(cols)
     if with_queue:
+        if fresh is not None:
+            r += [_fresh_td(fresh[o], sc["fr"], i == 0) for i, o in enumerate(cols)] + [_fresh_td(fresh["Total"], sc["fr"])]
         r.append(_cg_queue_cells(queue, sc))
     return "".join(r) + "</tr>"
 
@@ -2013,15 +2045,17 @@ def kc_cg_monthly_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, show_
     out = ["<div class='mt' style='margin-bottom:4px'>Monthly Grading, Certs Change and Usage by Origin (bags)</div>",
            f"<div class='rwrap' style='height:{height}'>"]
     out += _cg_head("Month", cols, with_rate, with_queue)
-    qm = None
+    qm = frm = None
     if with_queue:
         qd = kc_queue_frame(g, pd.Series(days), kc).reindex(d.index)
         qm = pd.DataFrame({"Failed": qd["Failed"].groupby(per).sum(), "Pending": qd["Pending"].groupby(per).last(),
                            "Certs": qd["Certs"].groupby(per).last(), "Fresh": qd["Fresh"].groupby(per).sum()})
-        sc.update(_queue_scales(qm))
+        frm = _fresh_cols(kc_fresh_frame(g, pd.Series(days), "Origin").reindex(d.index).groupby(per).sum(), cols)
+        sc["fr"] = max(float(frm.drop(columns="Total").abs().max().max()), 1.0)
     for pr in lots.index[::-1]:
         out.append(_cg_row(pr.strftime("%b %Y"), lots.loc[pr], chg_m.loc[pr], use_m.loc[pr], cols, sc, True,
-                           rate.loc[pr] if with_rate else None, qm.loc[pr] if with_queue else None, with_queue))
+                           rate.loc[pr] if with_rate else None, qm.loc[pr] if with_queue else None, with_queue,
+                           frm.loc[pr] if with_queue else None))
     return "".join(out) + "</tbody></table></div>"
 
 
@@ -2043,13 +2077,15 @@ def kc_cg_daily_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, show_al
     out = ["<div class='mt' style='margin-bottom:4px'>Daily Grading, Certs Change and Usage by Origin (bags)</div>",
            f"<div class='rwrap' style='height:{height}'>"]
     out += _cg_head("Date", cols, with_rate, with_queue)
-    qd = None
+    qd = frd = None
     if with_queue:
         qd = kc_queue_frame(g, pd.Series(days), kc)
-        sc.update(_queue_scales(qd))
+        frd = _fresh_cols(kc_fresh_frame(g, pd.Series(days), "Origin"), cols)
+        sc["fr"] = max(float(frd.drop(columns="Total").abs().max().max()), 1.0)
     for dt in days[::-1]:
         out.append(_cg_row(dt.strftime("%d-%b-%y"), pp.loc[dt], cc.loc[dt].fillna(0), use.loc[dt].fillna(0), cols, sc,
-                           dt in d.index, rate.loc[dt] if with_rate else None, qd.loc[dt] if with_queue else None, with_queue))
+                           dt in d.index, rate.loc[dt] if with_rate else None, qd.loc[dt] if with_queue else None, with_queue,
+                           frd.loc[dt] if with_queue else None))
     return "".join(out) + "</tbody></table></div>"
 
 
@@ -2126,27 +2162,29 @@ def _cg_port_head(first_col: str, cols: list, with_rate: bool = False, with_queu
             groups.append([ct, 1])
     n = len(cols) + 1
     edge = "border-left:2px solid #0a2463;"
-    blocks = [("Bags Passed by Port", False)]
+    blocks = [("Bags Passed by Port", False, False)]
     if with_rate:
-        blocks.append(("Pass % by Port", False))
-    blocks += [("Certs Change by Port", True), ("Usage by Port", True)]
+        blocks.append(("Pass % by Port", False, True))
+    blocks += [("Certs Change by Port", True, False), ("Usage by Port", True, False)]
+    if with_queue:
+        blocks.append(("Fresh Pending by Port", False, True))
     h = ["<table class='rpt cmp" + (" tiny" if with_rate else "") + "'><thead><tr class='h1'>",
          f"<th class='dt' rowspan='3'>{first_col}</th>"]
-    for gi, (title, certs) in enumerate(blocks):
+    for gi, (title, certs, _small) in enumerate(blocks):
         h.append(f"<th colspan='{n}'{' class=certs-hdr' if certs else ''}{' style=' + repr(edge) if gi else ''}>{title}</th>")
     if with_queue:
-        h.append(f"<th colspan='3' style={edge!r}>Grading Queue</th>")
+        h.append(f"<th colspan='2' style={edge!r}>Grading Queue</th>")
     h.append("</tr><tr class='h2'>")
     for gi in range(len(blocks)):
         for i, (ct, k) in enumerate(groups):
             e = edge if (gi and i == 0) else ("border-left:2px solid #ffffff;" if i else "")
-            pr = " class='pr'" if (with_rate and gi == 1) else ""
+            pr = " class='pr'" if blocks[gi][2] else ""
             h.append(f"<th colspan='{k}'{pr} style='background:{KC_COUNTRY_COLORS[ct]};{e}letter-spacing:.06em;"
                      f"text-transform:uppercase'>{ct}</th>")
-        tcls = "certs-hdr" if blocks[gi][1] else ("pr" if (with_rate and gi == 1) else "")
-        h.append(f"<th rowspan='2'{' class=' + tcls if tcls else ''}>{'Tot' if (with_rate and gi == 1) else 'Total'}</th>")
+        tcls = "certs-hdr" if blocks[gi][1] else ("pr" if blocks[gi][2] else "")
+        h.append(f"<th rowspan='2'{' class=' + tcls if tcls else ''}>{'Tot' if blocks[gi][2] else 'Total'}</th>")
     if with_queue:
-        h.append(f"<th rowspan='2' style={edge!r}>Pending</th><th rowspan='2'>Certs</th><th rowspan='2'>Fresh Pending</th>")
+        h.append(f"<th rowspan='2' style={edge!r}>Pending</th><th rowspan='2'>Certs</th>")
     h.append("</tr><tr class='h3'>")
     for gi in range(len(blocks)):
         k = 0
@@ -2154,7 +2192,7 @@ def _cg_port_head(first_col: str, cols: list, with_rate: bool = False, with_queu
             for j in range(kk):
                 c = cols[k]
                 e = edge if (gi and k == 0) else ("border-left:2px solid #ffffff;" if j == 0 and i else "")
-                pr = " class='pr'" if (with_rate and gi == 1) else ""
+                pr = " class='pr'" if blocks[gi][2] else ""
                 h.append(f"<th{pr} style='background:color-mix(in srgb, {KC_COUNTRY_COLORS[ct]} 58%, #0a2463);{e}'>"
                          f"{KC_GR_PORT_SHORT[c]}</th>")
                 k += 1
@@ -2192,7 +2230,7 @@ def kc_cg_port_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, monthly:
     out = [f"<div class='mt' style='margin-bottom:4px'>{title} Grading, Certs Change and Usage by Port (bags)</div>",
            f"<div class='rwrap' style='height:{height}'>"]
     out += _cg_port_head(first, cols, with_rate, with_queue)
-    qq = None
+    qq = frp = None
     if with_queue:
         qd = kc_queue_frame(g, pd.Series(days), kc)
         if monthly:
@@ -2202,10 +2240,13 @@ def kc_cg_port_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, monthly:
                                "Certs": qdm["Certs"].groupby(per).last(), "Fresh": qdm["Fresh"].groupby(per).sum()})
         else:
             qq = qd
-        sc.update(_queue_scales(qq))
+        frp = kc_fresh_frame(g, pd.Series(days), "Port")
+        frp = _fresh_cols(frp.reindex(d.index).groupby(d.index.to_period("M")).sum() if monthly else frp, cols)
+        sc["fr"] = max(float(frp.drop(columns="Total").abs().max().max()), 1.0)
     for key, label, has in rows:
         out.append(_cg_row(label, pas.loc[key], chg.loc[key], use.loc[key], cols, sc, has,
-                           rate.loc[key] if with_rate else None, qq.loc[key] if with_queue else None, with_queue))
+                           rate.loc[key] if with_rate else None, qq.loc[key] if with_queue else None, with_queue,
+                           frp.loc[key] if with_queue else None))
     return "".join(out) + "</tbody></table></div>"
 
 
