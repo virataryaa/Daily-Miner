@@ -2101,8 +2101,8 @@ def kc_cg_usage_port(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame) -> pd.D
     return p - kc_port_certs(kc).diff().reindex(d.index).fillna(0)
 
 
-def _cg_port_head(first_col: str, cols: list) -> list:
-    """Three header rows: group (Passed | Certs Change | Usage), country band, port codes."""
+def _cg_port_head(first_col: str, cols: list, with_rate: bool = False) -> list:
+    """Three header rows: group (Passed | Pass % | Certs Change | Usage), country band, port codes."""
     groups = []
     for c in cols:
         ct = KC_GR_PORT_COUNTRY[c]
@@ -2112,23 +2112,28 @@ def _cg_port_head(first_col: str, cols: list) -> list:
             groups.append([ct, 1])
     n = len(cols) + 1
     edge = "border-left:2px solid #0a2463;"
-    h = ["<table class='rpt cmp'><thead><tr class='h1'>", f"<th class='dt' rowspan='3'>{first_col}</th>",
-         f"<th colspan='{n}'>Bags Passed by Port</th>",
-         f"<th colspan='{n}' class='certs-hdr' style='{edge}'>Certs Change by Port</th>",
-         f"<th colspan='{n}' class='certs-hdr' style='{edge}'>Usage by Port</th></tr><tr class='h2'>"]
-    for grp in range(3):
+    blocks = [("Bags Passed by Port", False)]
+    if with_rate:
+        blocks.append(("Pass % by Port", False))
+    blocks += [("Certs Change by Port", True), ("Usage by Port", True)]
+    h = ["<table class='rpt cmp" + (" tiny" if with_rate else "") + "'><thead><tr class='h1'>",
+         f"<th class='dt' rowspan='3'>{first_col}</th>"]
+    for gi, (title, certs) in enumerate(blocks):
+        h.append(f"<th colspan='{n}'{' class=certs-hdr' if certs else ''}{' style=' + repr(edge) if gi else ''}>{title}</th>")
+    h.append("</tr><tr class='h2'>")
+    for gi in range(len(blocks)):
         for i, (ct, k) in enumerate(groups):
-            e = edge if (grp and i == 0) else ("border-left:2px solid #ffffff;" if i else "")
+            e = edge if (gi and i == 0) else ("border-left:2px solid #ffffff;" if i else "")
             h.append(f"<th colspan='{k}' style='background:{KC_COUNTRY_COLORS[ct]};{e}letter-spacing:.06em;"
                      f"text-transform:uppercase'>{ct}</th>")
-        h.append(f"<th rowspan='2'{' class=certs-hdr' if grp else ''}>Total</th>")
+        h.append(f"<th rowspan='2'{' class=certs-hdr' if blocks[gi][1] else ''}>Total</th>")
     h.append("</tr><tr class='h3'>")
-    for grp in range(3):
+    for gi in range(len(blocks)):
         k = 0
         for i, (ct, kk) in enumerate(groups):
             for j in range(kk):
                 c = cols[k]
-                e = edge if (grp and k == 0) else ("border-left:2px solid #ffffff;" if j == 0 and i else "")
+                e = edge if (gi and k == 0) else ("border-left:2px solid #ffffff;" if j == 0 and i else "")
                 h.append(f"<th style='background:color-mix(in srgb, {KC_COUNTRY_COLORS[ct]} 58%, #0a2463);{e}'>"
                          f"{KC_GR_PORT_SHORT[c]}</th>")
                 k += 1
@@ -2137,32 +2142,38 @@ def _cg_port_head(first_col: str, cols: list) -> list:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def kc_cg_port_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, monthly: bool, height: str = "auto") -> str:
+def kc_cg_port_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, monthly: bool, height: str = "auto",
+                    with_rate: bool = False) -> str:
     days = pd.DatetimeIndex(days)
     d = kc_cg_daily(g, pd.Series(days), kc)
     pas_all = kc_gr_wide(g, pd.Series(days), "Passed", by="Port").reindex(columns=KC_GR_PORTS, fill_value=0)
+    fail_all = kc_gr_wide(g, pd.Series(days), "Failed", by="Port").reindex(columns=KC_GR_PORTS, fill_value=0)
     chg_all = kc_port_certs(kc).diff().reindex(days)
     cols = [p for p in KC_GR_PORTS if pas_all[p].sum() > 0 or chg_all[p].abs().sum() > 0]
     if monthly:
         per = d.index.to_period("M")
         pas = pas_all.reindex(d.index)[cols].groupby(per).sum()
+        fl = fail_all.reindex(d.index)[cols].groupby(per).sum()
+        f_tot = fail_all.reindex(d.index).sum(axis=1).groupby(per).sum()
         chg = chg_all.reindex(d.index)[cols].fillna(0).groupby(per).sum()
         rows = [(pr, pr.strftime("%b %Y"), True) for pr in pas.index[::-1]]
         first, title = "Month", "Monthly"
     else:
-        pas, chg = pas_all[cols], chg_all[cols].fillna(0)
+        pas, fl, f_tot, chg = pas_all[cols], fail_all[cols], fail_all.sum(axis=1), chg_all[cols].fillna(0)
         rows = [(dt, dt.strftime("%d-%b-%y"), dt in d.index) for dt in days[::-1]]
         first, title = "Date", "Daily"
     use = pas - chg
+    rate = _rate_frame(pas, fl, f_tot) if with_rate else None
     okr = [r for r, _, h in rows if h]
     sc = {"p": max(float(pas.max().max()), 1.0), "pt": max(float(pas.sum(axis=1).max()), 1.0),
           "c": max(float(chg.loc[okr].abs().max().max()), 1.0), "ct": max(float(chg.loc[okr].sum(axis=1).abs().max()), 1.0),
           "u": max(float(use.loc[okr].abs().max().max()), 1.0), "ut": max(float(use.loc[okr].sum(axis=1).abs().max()), 1.0)}
     out = [f"<div class='mt' style='margin-bottom:4px'>{title} Grading, Certs Change and Usage by Port (bags)</div>",
            f"<div class='rwrap' style='height:{height}'>"]
-    out += _cg_port_head(first, cols)
+    out += _cg_port_head(first, cols, with_rate)
     for key, label, has in rows:
-        out.append(_cg_row(label, pas.loc[key], chg.loc[key], use.loc[key], cols, sc, has))
+        out.append(_cg_row(label, pas.loc[key], chg.loc[key], use.loc[key], cols, sc, has,
+                           rate.loc[key] if with_rate else None))
     return "".join(out) + "</tbody></table></div>"
 
 
@@ -2608,11 +2619,25 @@ if commodity == "Coffee":
 
         else:
             g, gdays = load_kc_grading()
-            cv_all = st.radio("Origins", ["Top 5 + Other", "Show all origins"], horizontal=True,
-                              label_visibility="collapsed", key="acv_origins") == "Show all origins"
-            st.markdown(kc_cg_daily_html(g, gdays, kc, cv_all, "72vh", True), unsafe_allow_html=True)
-            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-            st.markdown(kc_cg_monthly_html(g, gdays, kc, cv_all, "auto", True), unsafe_allow_html=True)
+            cv1, cv2, _ = st.columns([1.2, 2, 3])
+            with cv1:
+                st.markdown("<div class='sb-label' style='margin:0 0 2px'>Split by</div>", unsafe_allow_html=True)
+                cv_split = st.radio("Split by", ["Origin", "Port"], horizontal=True,
+                                    label_visibility="collapsed", key="acv_split")
+            cv_all = False
+            if cv_split == "Origin":
+                with cv2:
+                    st.markdown("<div class='sb-label' style='margin:0 0 2px'>Origins shown</div>", unsafe_allow_html=True)
+                    cv_all = st.radio("Origins", ["Top 5 + Other", "Show all origins"], horizontal=True,
+                                      label_visibility="collapsed", key="acv_origins") == "Show all origins"
+            if cv_split == "Origin":
+                st.markdown(kc_cg_daily_html(g, gdays, kc, cv_all, "72vh", True), unsafe_allow_html=True)
+                st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                st.markdown(kc_cg_monthly_html(g, gdays, kc, cv_all, "auto", True), unsafe_allow_html=True)
+            else:
+                st.markdown(kc_cg_port_html(g, gdays, kc, False, "72vh", True), unsafe_allow_html=True)
+                st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                st.markdown(kc_cg_port_html(g, gdays, kc, True, "auto", True), unsafe_allow_html=True)
     else:
         # A plain st.radio (not st.tabs) is used for these two levels of navigation: st.tabs
         # renders every tab's body on every rerun regardless of which one is showing, whereas a
