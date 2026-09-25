@@ -2270,19 +2270,6 @@ if commodity == "Coffee":
                 st.plotly_chart(kc_gr_bar_fig(f_w, "Daily Bags Failed | Per Origin", show_all_o, 5, gs_, ge_),
                                 width="stretch", config=gcfg)
 
-                cm1, _ = st.columns([1, 5])
-                with cm1:
-                    st.markdown("<div class='sb-label' style='margin:0 0 2px'>Cumulative starts</div>", unsafe_allow_html=True)
-                    vcm = MONTH_ABBR.index(st.selectbox("Cumulative starts", MONTH_ABBR, index=6,
-                                                        label_visibility="collapsed", key="arg_crop_m")) + 1
-                cA, cB = st.columns(2)
-                with cA:
-                    st.plotly_chart(kc_cum_lines_cached(p_w.sum(axis=1), "Cumulative Bags Passed", vcm, g_max),
-                                    width="stretch", config=gcfg)
-                with cB:
-                    st.plotly_chart(kc_cum_lines_cached(f_w.sum(axis=1), "Cumulative Bags Failed", vcm, g_max),
-                                    width="stretch", config=gcfg)
-
             elif ar_g_view == "Cumulative":
                 sc0, sc1, sc2, _ = st.columns([1, 1, 1.4, 3])
                 with sc0:
