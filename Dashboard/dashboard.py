@@ -2501,6 +2501,15 @@ def rc_spread_certs_frame(pl: pd.DataFrame, certs: pd.DataFrame, freq: str = "Mo
     return df[df["stocks"] > 0]
 
 
+def kc_spread_r2(df: pd.DataFrame) -> float:
+    """R-squared of the ln fit on the same points the fit uses."""
+    d = df[df["stocks"] >= 1.0]
+    a, b = kc_spread_fit(df)
+    res = d["spread"].values - (a + b * np.log(d["stocks"].values))
+    tot = d["spread"].values - d["spread"].values.mean()
+    return float(1 - (res ** 2).sum() / (tot ** 2).sum())
+
+
 def kc_spread_fit(df: pd.DataFrame):
     """spread = a + b * ln(stocks), least squares (stocks in 000s bags, at least 1k bags)."""
     d = df[df["stocks"] >= 1.0]
@@ -2533,6 +2542,9 @@ def kc_spread_vs_certs_fig(df: pd.DataFrame, freq: str = "Monthly", height: int 
                                            "Spread %{y:.1f}<extra></extra>"))
     fig.add_annotation(x=last["stocks"], y=last["spread"], text=f"<b>{last_lab}</b>", showarrow=True,
                        arrowhead=0, ax=28, ay=-30, font=dict(size=12, color="#111111"))
+    fig.add_annotation(xref="paper", yref="paper", x=0.99, y=0.98, xanchor="right", yanchor="top", showarrow=False,
+                       text=f"<b>R² = {kc_spread_r2(df):.2f}</b>", font=dict(size=15, color="#111111"),
+                       bgcolor="rgba(255,255,255,0.85)", bordercolor="#c5cbdd", borderwidth=1, borderpad=6)
     sub = (f"Monthly average spreads, end-month cert stocks, {df.index[0].strftime('%b %Y')} to date" if monthly else
            f"Daily spreads vs daily cert stocks, {df.index[0].strftime('%b %Y')} to date")
     chart_layout(fig, f"<b>{name} 1/2 Spread vs Cert Stocks</b><br><sup>{sub}</sup>", height)
