@@ -1285,7 +1285,7 @@ if commodity == "Coffee":
     with st.container(key="coffee_section_box"):
         coffee_section = st.radio("Coffee section", ["Arabica", "Robusta"], horizontal=True,
                                   label_visibility="collapsed", key="coffee_section")
-    st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+    st.markdown("<hr style='border:none;border-top:1px solid #dfe3ee;margin:10px 0 14px'>", unsafe_allow_html=True)
 
     if coffee_section == "Arabica":
         kc = load_kc_certs()
