@@ -2736,19 +2736,8 @@ def render_price_link(comm: str, pl: pd.DataFrame, series: dict, frame_fn) -> No
         st.plotly_chart(pl_dual_fig(_mstamp(upct), _mstamp(spm), f"{cfg['name']} usage % of stocks vs 1/2 spread", "Usage %", "C1 - C2",
                                     "Usage (% of certs)", f"1/2 spread ({cfg['price_unit']})", "bar"), width="stretch", config=cfgc, key=f"pl{comm}_u2")
         pl_section("Usage rate vs spread")
-        f1, _ = st.columns([1.4, 4])
-        with f1:
-            st.markdown("<div class='sb-label' style='margin:0 0 2px'>Frequency</div>", unsafe_allow_html=True)
-            ufreq = st.radio("Usage frequency", ["Daily", "Monthly"], horizontal=True, label_visibility="collapsed", key=f"pl{comm}_ufreq")
-        if ufreq == "Daily":
-            lvl = certs.reindex(u.index)
-            xs_, ys_ = (u / lvl * 100), spread.reindex(u.index)
-            fmt = "%d %b %Y"
-        else:
-            xs_, ys_ = upct, spm
-            fmt = "%b-%y"
-        st.plotly_chart(pl_scatter_fig(xs_, ys_, f"{cfg['name']} usage % vs 1/2 spread ({ufreq.lower()})", "Usage (% of certs)",
-                                       f"1/2 spread ({cfg['price_unit']})", fmt), width="content", config=cfgc, key=f"pl{comm}_u3")
+        st.plotly_chart(pl_scatter_fig(upct, spm, f"{cfg['name']} usage % vs 1/2 spread (monthly)", "Usage (% of certs)",
+                                       f"1/2 spread ({cfg['price_unit']})", "%b-%y"), width="content", config=cfgc, key=f"pl{comm}_u3")
 
     elif view == "Pending vs Spread":
         span = pl_span_radio(f"pl{comm}_span5", "All")
