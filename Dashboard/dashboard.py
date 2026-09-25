@@ -1988,8 +1988,8 @@ def _rate_td(v, sep: bool = False) -> str:
     cls = " class='sep'" if sep else ""
     if pd.isna(v):
         return f"<td{cls}></td>"
-    r, g_, b_ = _rate_rgb(float(v))
-    return f"<td{cls} style='background:rgb({r},{g_},{b_})'>{v:.0f}%</td>"
+    alpha = 0.08 + 0.77 * min(max(float(v), 0.0), 100.0) / 100.0
+    return f"<td{cls} style='background:rgba(31,157,111,{alpha:.2f})'>{v:.0f}%</td>"
 
 
 def _cg_row(label: str, pas: pd.Series, chg: pd.Series, use: pd.Series, cols: list, sc: dict, has: bool = True,
@@ -2610,9 +2610,9 @@ if commodity == "Coffee":
             g, gdays = load_kc_grading()
             cv_all = st.radio("Origins", ["Top 5 + Other", "Show all origins"], horizontal=True,
                               label_visibility="collapsed", key="acv_origins") == "Show all origins"
-            st.markdown(kc_cg_monthly_html(g, gdays, kc, cv_all, "auto", True), unsafe_allow_html=True)
-            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
             st.markdown(kc_cg_daily_html(g, gdays, kc, cv_all, "72vh", True), unsafe_allow_html=True)
+            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            st.markdown(kc_cg_monthly_html(g, gdays, kc, cv_all, "auto", True), unsafe_allow_html=True)
     else:
         # A plain st.radio (not st.tabs) is used for these two levels of navigation: st.tabs
         # renders every tab's body on every rerun regardless of which one is showing, whereas a
