@@ -1701,11 +1701,11 @@ def _rate_rgb(p: float) -> tuple:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def kc_gr_measure(g: pd.DataFrame, days: pd.Series, measure: str) -> pd.DataFrame:
-    """Daily bags by origin for Passed, Failed or Total (= Passed + Failed)."""
+def kc_gr_measure(g: pd.DataFrame, days: pd.Series, measure: str, by: str = "Origin") -> pd.DataFrame:
+    """Daily bags by origin (or port) for Passed, Failed or Total (= Passed + Failed)."""
     if measure != "Total":
-        return kc_gr_wide(g, pd.Series(days), measure)
-    w = kc_gr_wide(g, pd.Series(days), "Passed").add(kc_gr_wide(g, pd.Series(days), "Failed"), fill_value=0)
+        return kc_gr_wide(g, pd.Series(days), measure, by=by)
+    w = kc_gr_wide(g, pd.Series(days), "Passed", by=by).add(kc_gr_wide(g, pd.Series(days), "Failed", by=by), fill_value=0)
     return w[w.sum().sort_values(ascending=False).index]
 
 
@@ -2413,13 +2413,13 @@ if commodity == "Coffee":
                                 width="stretch", config=gcfg)
 
             elif ar_g_view == "Cumulative":
-                sc0, sc1, sc2, _ = st.columns([1, 1, 1.4, 3])
+                sc0, sc1, sc2, sc3, _ = st.columns([1, 1, 1.4, 1.4, 2])
                 with sc0:
                     st.markdown("<div class='sb-label' style='margin:0 0 2px'>Measure</div>", unsafe_allow_html=True)
                     meas = st.selectbox("Measure", ["Total", "Passed", "Failed"], index=1,
                                         label_visibility="collapsed", key="ars_measure")
                 m_w = kc_gr_measure(g, gdays, meas)
-                p_w, f_w = kc_gr_wide(g, gdays, "Passed"), kc_gr_wide(g, gdays, "Failed")
+                m_p = kc_gr_measure(g, gdays, meas, by="Port")
                 with sc1:
                     st.markdown("<div class='sb-label' style='margin:0 0 2px'>Crop year starts</div>", unsafe_allow_html=True)
                     scm = MONTH_ABBR.index(st.selectbox("Crop year starts", MONTH_ABBR, index=6,
@@ -2428,32 +2428,33 @@ if commodity == "Coffee":
                     st.markdown("<div class='sb-label' style='margin:0 0 2px'>Fourth chart origin</div>", unsafe_allow_html=True)
                     fourth = st.selectbox("Fourth chart", ["Total"] + list(m_w.columns[3:]), index=0,
                                           label_visibility="collapsed", key="ars_fourth")
+                with sc3:
+                    st.markdown("<div class='sb-label' style='margin:0 0 2px'>Fourth chart port</div>", unsafe_allow_html=True)
+                    fourth_p = st.selectbox("Fourth chart port", ["Total"] + list(m_p.columns[3:]), index=0,
+                                            label_visibility="collapsed", key="ars_fourth_port")
                 m_lbl = "passed + failed" if meas == "Total" else meas.lower()
-                q = st.columns(4)
-                for col_, o in zip(q, list(m_w.columns[:3]) + [fourth]):
+
+                st.markdown("<div class='sec'>Per Origin</div>", unsafe_allow_html=True)
+                for col_, o in zip(st.columns(4), list(m_w.columns[:3]) + [fourth]):
                     with col_:
                         s_ = m_w.sum(axis=1) if o == "Total" else m_w[o]
                         st.plotly_chart(kc_cum_lines_cached(s_, f"{o} | cumulative {m_lbl}", scm, g_max),
                                         width="stretch", config=gcfg)
 
-                st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
-                mo1, _ = st.columns([1.2, 5])
-                with mo1:
-                    st.markdown("<div class='sb-label' style='margin:0 0 2px'>Origin for matrices</div>", unsafe_allow_html=True)
-                    m_or = st.selectbox("Origin for matrices", list(m_w.columns), index=0,
-                                        label_visibility="collapsed", key="ars_matrix_origin")
-                m_hdr = "Passed + Failed" if meas == "Total" else meas
-                st.markdown(f"<div class='mt'>Monthly Bags {m_hdr}: Total</div>", unsafe_allow_html=True)
-                st.markdown(kc_monthly_matrix_html(kc_monthly_sum(m_w.sum(axis=1)), scm), unsafe_allow_html=True)
-                st.markdown("<div style='height:22px'></div>", unsafe_allow_html=True)
-                st.markdown(f"<div class='mt'>Monthly Bags {m_hdr}: {m_or}</div>", unsafe_allow_html=True)
-                st.markdown(kc_monthly_matrix_html(kc_monthly_sum(m_w[m_or]), scm), unsafe_allow_html=True)
-                st.markdown("<div style='height:22px'></div>", unsafe_allow_html=True)
-                zero = pd.Series(0, index=p_w.index)
-                st.markdown(f"<div class='mt'>Monthly Pass %: {m_or}</div>", unsafe_allow_html=True)
-                st.markdown(kc_passrate_matrix_html(kc_monthly_sum(p_w[m_or] if m_or in p_w.columns else zero),
-                                                    kc_monthly_sum(f_w[m_or] if m_or in f_w.columns else zero), scm),
-                            unsafe_allow_html=True)
+                st.markdown("<div class='sec'>Per Port</div>", unsafe_allow_html=True)
+                for col_, p_ in zip(st.columns(4), list(m_p.columns[:3]) + [fourth_p]):
+                    with col_:
+                        s_ = m_p.sum(axis=1) if p_ == "Total" else m_p[p_]
+                        ttl = p_ if p_ == "Total" else f"{p_} ({KC_GR_PORT_COUNTRY[p_]})"
+                        st.plotly_chart(kc_cum_lines_cached(s_, f"{ttl} | cumulative {m_lbl}", scm, g_max),
+                                        width="stretch", config=gcfg)
+
+                st.markdown("<div class='sec'>Per Country of Port</div>", unsafe_allow_html=True)
+                for col_, ct in zip(st.columns(4), ["Belgium", "Spain", "Germany", "USA"]):
+                    with col_:
+                        cs = m_p.reindex(columns=[p_ for p_ in KC_GR_PORTS if KC_GR_PORT_COUNTRY[p_] == ct], fill_value=0).sum(axis=1)
+                        st.plotly_chart(kc_cum_lines_cached(cs, f"{ct} | cumulative {m_lbl}", scm, g_max),
+                                        width="stretch", config=gcfg)
 
             elif ar_g_view == "Pending":
                 dn1, dn2 = st.columns(2)
@@ -2507,6 +2508,14 @@ if commodity == "Coffee":
                 st.plotly_chart(kc_gr_pf_bars_fig(mf, f"Passed / Failed Proportion by Month | {lbl}", proportion=True),
                                 width="stretch", config=gcfg)
 
+                mx1, _ = st.columns([1, 5])
+                with mx1:
+                    st.markdown("<div class='sb-label' style='margin:0 0 2px'>Crop year starts</div>", unsafe_allow_html=True)
+                    rcm = MONTH_ABBR.index(st.selectbox("Pass rate crop year starts", MONTH_ABBR, index=6,
+                                                        label_visibility="collapsed", key="arr_crop_m")) + 1
+                st.markdown(f"<div class='mt'>Pass Rate Per Origin | {lbl}</div>", unsafe_allow_html=True)
+                st.markdown(kc_passrate_matrix_html(mf["Passed"], mf["Failed"], rcm), unsafe_allow_html=True)
+                st.markdown("<div style='height:22px'></div>", unsafe_allow_html=True)
                 rs1, _ = st.columns([2.6, 4])
                 with rs1:
                     r_span = st.radio("Pass rate period", ["3M", "6M", "1Y", "All", "Custom"], index=0, horizontal=True,
