@@ -124,6 +124,7 @@ span[data-baseweb="tag"] svg { fill: #ffffff !important; }
 .rpt thead th.certs-hdr { background: #9c6a17 !important; }
 .rpt td.gs { border-left: 1px solid #dfe3ee; }
 .rpt thead th.dt { top: 0; z-index: 3; }
+.rpt thead th.l, .rpt td.l { text-align: left; }
 .rpt .sep { border-left: 2px solid #0a2463; }
 .rpt td { padding: 2px 9px; text-align: center; border-bottom: 1px solid #eef0f6; color: #1a1a2e; white-space: nowrap; }
 .rpt td.d { color: #5a6688; font-weight: 500; }
@@ -161,6 +162,196 @@ def load_rc_certs() -> pd.DataFrame:
     df = pd.read_parquet(DB_DIR / "rc_certs.parquet")
     df["Date"] = pd.to_datetime(df["Date"])
     return df.sort_values("Date").reset_index(drop=True)
+
+
+@st.cache_data(ttl=600)
+def load_kc_certs() -> pd.DataFrame:
+    df = pd.read_parquet(DB_DIR / "kc_certs.parquet")
+    df["Date"] = pd.to_datetime(df["Date"])
+    return df.sort_values("Date").reset_index(drop=True)
+
+
+KC_ORIGIN_NAMES = {
+    "BRZ": "Brazil", "BUR": "Burundi", "COL": "Colombia", "COS": "Costa Rica", "ELS": "El Salvador",
+    "HON": "Honduras", "IND": "India", "MEX": "Mexico", "NIC": "Nicaragua", "PAN": "Papua New Guinea",
+    "PER": "Peru", "RWA": "Rwanda", "TAN": "Tanzania", "UGA": "Uganda", "VEN": "Venezuela", "GUA": "Guatemala",
+}
+KC_PORT_NAMES = {"AN": "ANT", "BA": "BAR", "HA": "HA/BR", "HO": "HOU", "MI": "MIAMI", "NO": "NOLA", "NY": "NY"}
+KC_GRADE_PORTS = ["AN", "HA", "HO", "MI", "NO", "NY"]
+
+
+def kc_change_matrix_html(df: pd.DataFrame, older: pd.Timestamp, latest: pd.Timestamp) -> str:
+    """Origin x port matrix of the change in certified stocks between two dates (bags), with a
+    Total row (from the source's own KC-TOT-{port} column) and Total column (KC-{origin}-TOT)."""
+    ro = df[df["Date"] == older]
+    rl = df[df["Date"] == latest]
+    if ro.empty or rl.empty:
+        return "<div class='rwrap' style='padding:14px'>No data for one of the selected dates.</div>"
+    ro, rl = ro.iloc[0], rl.iloc[0]
+    origins, ports = list(KC_ORIGIN_NAMES), list(KC_PORT_NAMES)
+
+    def d(o, p):
+        c = f"KC-{o}-{p}"
+        a, b = ro.get(c), rl.get(c)
+        a = 0 if pd.isna(a) else a
+        b = 0 if pd.isna(b) else b
+        return float(b - a)
+
+    grid = {(o, p): d(o, p) for o in origins for p in ports}
+    row_tot = {o: d(o, "TOT") for o in origins}
+    col_tot = {p: d("TOT", p) for p in ports}
+    grand = d("TOT", "TOT")
+    scale = max([abs(v) for v in grid.values()] + [1.0])
+
+    def scell(v, sep=False):
+        cls = "sep" if sep else ""
+        if v == 0:
+            return f"<td class='{cls}'></td>"
+        alpha = min(abs(v) / scale, 1.0) * 0.85
+        color = "31,157,111" if v > 0 else "201,74,74"
+        return f"<td class='{cls}' style='background:rgba({color},{alpha:.2f})'>{v:+,.0f}</td>"
+
+    def totcell(v, sep=False):
+        cls = "tot" + (" sep" if sep else "")
+        if v == 0:
+            return f"<td class='{cls}'>0</td>"
+        cls2 = "pos" if v > 0 else "neg"
+        return f"<td class='{cls}'><span class='{cls2}'>{v:+,.0f}</span></td>"
+
+    head = ["<div class='rwrap' style='height:auto'><table class='rpt'><thead><tr class='h2'>",
+            "<th class='dt l'>Origin</th>"]
+    head += [f"<th>{KC_PORT_NAMES[p]}</th>" for p in ports] + ["<th class='sep'>Total</th></tr></thead><tbody>"]
+    body = []
+    for o in origins:
+        row = [f"<tr><td class='d l'>{KC_ORIGIN_NAMES[o]}</td>"]
+        row += [scell(grid[(o, p)]) for p in ports]
+        row.append(totcell(row_tot[o], sep=True))
+        row.append("</tr>")
+        body.append("".join(row))
+    body.append("<tr><td class='d l tot'>Total</td>" + "".join(totcell(col_tot[p]) for p in ports) +
+               totcell(grand, sep=True) + "</tr>")
+    return "".join(head) + "".join(body) + "</tbody></table></div>"
+
+
+def kc_latest_matrix_html(df: pd.DataFrame, latest: pd.Timestamp) -> str:
+    """Origin x port latest certified stocks (bags), green heat-map on one shared scale, with
+    Total row/column, an Origin % (of grand total) column and a Port % row."""
+    r = df[df["Date"] == latest]
+    if r.empty:
+        return "<div class='rwrap' style='padding:14px'>No data for the selected date.</div>"
+    r = r.iloc[0]
+    origins, ports = list(KC_ORIGIN_NAMES), list(KC_PORT_NAMES)
+
+    def v(o, p):
+        x = r.get(f"KC-{o}-{p}")
+        return 0.0 if pd.isna(x) else float(x)
+
+    grid = {(o, p): v(o, p) for o in origins for p in ports}
+    row_tot = {o: v(o, "TOT") for o in origins}
+    col_tot = {p: v("TOT", p) for p in ports}
+    grand = v("TOT", "TOT")
+    scale = max(list(grid.values()) + [1.0])
+    pmax = max([row_tot[o] / grand * 100 if grand else 0 for o in origins] +
+               [col_tot[p] / grand * 100 if grand else 0 for p in ports] + [1.0])
+
+    def cell(x, sep=False):
+        cls = "sep" if sep else ""
+        if x == 0:
+            return f"<td class='{cls}'></td>"
+        alpha = min(x / scale, 1.0) * 0.85
+        return f"<td class='{cls}' style='background:rgba(31,157,111,{alpha:.2f})'>{x:,.0f}</td>"
+
+    def totcell(x, sep=False):
+        cls = "tot" + (" sep" if sep else "")
+        return f"<td class='{cls}'>{x:,.0f}</td>"
+
+    def pctcell(x, sep=False):
+        cls = "sep" if sep else ""
+        pct = x / grand * 100 if grand else 0
+        if pct == 0:
+            return f"<td class='{cls}'></td>"
+        alpha = min(pct / pmax, 1.0) * 0.85
+        return f"<td class='{cls}' style='background:rgba(31,157,111,{alpha:.2f})'>{pct:.0f}%</td>"
+
+    head = ["<div class='rwrap' style='height:auto'><table class='rpt'><thead><tr class='h2'>",
+            "<th class='dt l'>Origin</th>"]
+    head += [f"<th>{KC_PORT_NAMES[p]}</th>" for p in ports] + [
+        "<th class='sep'>Total</th><th class='sep'>Origin %</th></tr></thead><tbody>"]
+    body = []
+    for o in origins:
+        row = [f"<tr><td class='d l'>{KC_ORIGIN_NAMES[o]}</td>"]
+        row += [cell(grid[(o, p)]) for p in ports]
+        row.append(totcell(row_tot[o], sep=True))
+        row.append(pctcell(row_tot[o], sep=True))
+        row.append("</tr>")
+        body.append("".join(row))
+    body.append("<tr><td class='d l tot'>Total</td>" + "".join(totcell(col_tot[p]) for p in ports) +
+               totcell(grand, sep=True) + "<td class='sep'></td></tr>")
+    body.append("<tr><td class='d l tot'>Port %</td>" +
+               "".join(pctcell(col_tot[p]) for p in ports) + "<td class='sep'></td><td class='sep'></td></tr>")
+    return "".join(head) + "".join(body) + "</tbody></table></div>"
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_grading_flow_html(df: pd.DataFrame, height: str = "70vh") -> str:
+    """Daily KC grading-queue flow: Passed/Failed lots, % passed, Pending, Certs level, Certs
+    change, Fresh Pending (= change in Pending + Passed + Failed) and Implied Decerts
+    (= Passed - Certs change). Same formulas as the desk's original Excel/Streamlit prototype."""
+    d = df.sort_values("Date").copy()
+    pass_cols = [f"KC-{p}-PASSGRAD" for p in KC_GRADE_PORTS]
+    fail_cols = [f"KC-{p}-FAILGRAD" for p in KC_GRADE_PORTS]
+    d["Passed"] = d[pass_cols].sum(axis=1, min_count=1)
+    d["Failed"] = d[fail_cols].sum(axis=1, min_count=1)
+    d["PctPassed"] = d["Passed"] / (d["Passed"] + d["Failed"]) * 100
+    d["Pending"] = d["KC-TOT-PENDING"].astype(float)
+    d["Certs"] = d["KC-TOT-TOT"].astype(float)
+    d["CertsChg"] = d["Certs"].diff()
+    d["FreshPending"] = d["Pending"].diff() + d["Passed"].fillna(0) + d["Failed"].fillna(0)
+    d["ImplDecerts"] = d["Passed"].fillna(0) - d["CertsChg"]
+    d = d.dropna(subset=["CertsChg"]).sort_values("Date", ascending=False)
+
+    p_scale = max(d["Passed"].max(), 1)
+    f_scale = max(d["Failed"].max(), 1)
+    c_scale = max(d["CertsChg"].abs().max(), 1)
+    fp_scale = max(d["FreshPending"].abs().max(), 1)
+    id_scale = max(d["ImplDecerts"].abs().max(), 1)
+
+    def num(v):
+        return "" if pd.isna(v) or v == 0 else f"{v:,.0f}"
+
+    def pct(v):
+        return "" if pd.isna(v) else f"{v:.0f}%"
+
+    def heat(v, sc, rgb):
+        if pd.isna(v) or v == 0:
+            return "<td></td>"
+        alpha = min(abs(v) / sc, 1.0) * 0.85
+        return f"<td style='background:rgba({rgb},{alpha:.2f})'>{v:,.0f}</td>"
+
+    def signed(v, sc):
+        if pd.isna(v):
+            return "<td class='na'></td>"
+        bar = f"<i class='{'up' if v > 0 else 'dn'}' style='width:{abs(v) / sc * 50:.1f}%'></i>" if v else ""
+        cls = "pos" if v > 0 else "neg" if v < 0 else ""
+        return f"<td class='cb'>{bar}<span class='{cls}'>{v:+,.0f}</span></td>"
+
+    head = ["<div class='rwrap' style='height:", height, "'><table class='rpt'><thead><tr class='h2'>",
+            "<th class='dt'>Date</th><th>Passed</th><th>Failed</th><th>%</th><th class='sep'>Pending</th>",
+            "<th>Certs</th><th>Certs Change</th><th>Fresh Pending</th><th>Impl Decerts</th></tr></thead><tbody>"]
+    body = []
+    for _, r in d.iterrows():
+        row = [f"<tr><td class='d'>{r['Date'].strftime('%d-%b-%y')}</td>"]
+        row.append(heat(r["Passed"], p_scale, "31,157,111"))
+        row.append(heat(r["Failed"], f_scale, "201,74,74"))
+        row.append(f"<td>{pct(r['PctPassed'])}</td>")
+        row.append(f"<td class='sep'>{num(r['Pending'])}</td>")
+        row.append(f"<td class='tot'>{num(r['Certs'])}</td>")
+        row.append(signed(r["CertsChg"], c_scale))
+        row.append(heat(r["FreshPending"], fp_scale, "31,157,111"))
+        row.append(heat(r["ImplDecerts"], id_scale, "201,74,74"))
+        row.append("</tr>")
+        body.append("".join(row))
+    return "".join(head) + "".join(body) + "</tbody></table></div>"
 
 
 def fmt_int(v):
@@ -1061,8 +1252,48 @@ with st.sidebar:
     commodity = st.radio("Commodity", COMMODITIES, label_visibility="collapsed")
 
 if commodity == "Coffee":
-    tab_arabica, tab_robusta = st.tabs(["Arabica", "Robusta"])
-    with tab_robusta:
+    # Lazy radio again (see the note on rc_section_box below): Arabica now carries real work of
+    # its own (the KC matrices and grading-flow table), so a real st.tabs here would rebuild all
+    # of that every time something changes on the Robusta side, and vice versa.
+    with st.container(key="coffee_section_box"):
+        coffee_section = st.radio("Coffee section", ["Arabica", "Robusta"], horizontal=True,
+                                  label_visibility="collapsed", key="coffee_section")
+    st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+
+    if coffee_section == "Arabica":
+        kc = load_kc_certs()
+        with st.container(key="rc_section_box"):
+            ar_view = st.radio("Arabica view", ["Matrix", "Visuals", "Seasonals & Distribution"], horizontal=True,
+                               label_visibility="collapsed", key="ar_view")
+        st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+
+        if ar_view == "Matrix":
+            k_min, k_max = kc["Date"].min(), kc["Date"].max()
+            dc1, dc2, _ = st.columns([1, 1, 4])
+            with dc1:
+                st.markdown("<div class='sb-label' style='margin:0 0 2px'>Older Date</div>", unsafe_allow_html=True)
+                older_pick = st.date_input("Older date", value=(k_max - pd.Timedelta(days=7)).date(),
+                                           min_value=k_min.date(), max_value=k_max.date(),
+                                           key="ar_older", label_visibility="collapsed")
+            with dc2:
+                st.markdown("<div class='sb-label' style='margin:0 0 2px'>Latest Date</div>", unsafe_allow_html=True)
+                latest_pick = st.date_input("Latest date", value=k_max.date(),
+                                            min_value=k_min.date(), max_value=k_max.date(),
+                                            key="ar_latest", label_visibility="collapsed")
+            older_ts, latest_ts = pd.Timestamp(older_pick), pd.Timestamp(latest_pick)
+            st.markdown("<div class='mt'>Certified Stocks Change (bags)</div>", unsafe_allow_html=True)
+            st.markdown(kc_change_matrix_html(kc, older_ts, latest_ts), unsafe_allow_html=True)
+            st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='mt'>Latest Certified Stocks ({latest_ts.strftime('%d %b %Y')}, bags)</div>",
+                       unsafe_allow_html=True)
+            st.markdown(kc_latest_matrix_html(kc, latest_ts), unsafe_allow_html=True)
+            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            st.markdown("<div class='mt'>KC Grading Flow (bags)</div>", unsafe_allow_html=True)
+            st.markdown(kc_grading_flow_html(kc), unsafe_allow_html=True)
+        else:
+            st.markdown("<div class='card-desc'>Coming next.</div>", unsafe_allow_html=True)
+
+    else:
         # A plain st.radio (not st.tabs) is used for these two levels of navigation: st.tabs
         # renders every tab's body on every rerun regardless of which one is showing, whereas a
         # radio only ever runs the branch that's picked. That is what made switching between
