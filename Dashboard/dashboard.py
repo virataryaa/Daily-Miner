@@ -2360,6 +2360,11 @@ if commodity == "Coffee":
                                         label_visibility="collapsed", key="arr_port")
                 mf = kc_gr_month_pf(g, gdays, r_or, r_po)
                 lbl = f"{r_or} at {r_po}"
+                st.plotly_chart(kc_gr_pf_bars_fig(mf, f"Passed / Failed Bags by Month | {lbl}"),
+                                width="stretch", config=gcfg)
+                st.plotly_chart(kc_gr_pf_bars_fig(mf, f"Passed / Failed Proportion by Month | {lbl}", proportion=True),
+                                width="stretch", config=gcfg)
+
                 rs1, _ = st.columns([2.6, 4])
                 with rs1:
                     r_span = st.radio("Pass rate period", ["3M", "6M", "1Y", "All", "Custom"], index=0, horizontal=True,
@@ -2379,10 +2384,6 @@ if commodity == "Coffee":
                     rs_, re_ = g_max - pd.DateOffset(months={"3M": 3, "6M": 6, "1Y": 12}[r_span]), g_max
                 st.plotly_chart(kc_gr_rate_bar_fig(kc_gr_day_pf(g, gdays, r_or, r_po),
                                                    f"Pass Rate by Day | {lbl} (label = bags passed)", rs_, re_),
-                                width="stretch", config=gcfg)
-                st.plotly_chart(kc_gr_pf_bars_fig(mf, f"Passed / Failed Bags by Month | {lbl}"),
-                                width="stretch", config=gcfg)
-                st.plotly_chart(kc_gr_pf_bars_fig(mf, f"Passed / Failed Proportion by Month | {lbl}", proportion=True),
                                 width="stretch", config=gcfg)
 
         else:
