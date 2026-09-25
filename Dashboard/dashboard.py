@@ -2428,7 +2428,7 @@ def rc_comp_html(gr: pd.DataFrame, certs: pd.DataFrame, monthly: bool, show_all:
 # ---------------------------------------------------------------------------------------------
 # Arabica Price Link: KC 1/2 spread vs certified stocks
 # ---------------------------------------------------------------------------------------------
-KC_SPREAD_BASIS = {"Rollex (active - next)": "spread_rollex", "C1 - C2": "spread_c12"}  # Rollex skips the expiring contract, C1 - C2 does not
+KC_SPREAD_COL = "spread_c12"     # C1 - C2 (LSEG continuation)
 
 
 @st.cache_data(ttl=600)
@@ -2446,46 +2446,56 @@ def load_eom_hist() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def kc_spread_certs_frame(pl: pd.DataFrame, kc: pd.DataFrame, eom: pd.DataFrame, basis: str) -> pd.DataFrame:
-    """One row per month: average daily spread and end-of-month certified stocks (000s bags). Stocks come from the
-    ICE month-end history before LSEG's daily certs start, and from LSEG after. The latest month is month-to-date."""
-    sp = pl[KC_SPREAD_BASIS[basis]].dropna()
-    sp = sp.groupby(sp.index.to_period("M")).mean()
+def kc_spread_certs_frame(pl: pd.DataFrame, kc: pd.DataFrame, eom: pd.DataFrame, freq: str = "Monthly") -> pd.DataFrame:
+    """Spread (C1 - C2, c/lb) against certified stocks (000s bags).
+    Monthly: average daily spread vs end-of-month stocks, ICE month-end history before LSEG's daily certs start and
+    LSEG after; the latest month is month-to-date (PeriodIndex).
+    Daily: each day's spread vs that day's certs total, from the first LSEG certs day (DatetimeIndex)."""
+    sp = pl[KC_SPREAD_COL].dropna()
     tot = kc.dropna(subset=["KC-TOT-TOT"]).set_index("Date")["KC-TOT-TOT"].astype(float)
+    if freq == "Daily":
+        df = pd.concat([sp.rename("spread"), (tot / 1000.0).rename("stocks")], axis=1).dropna()
+        return df[df["stocks"] > 0]
     live = tot.groupby(tot.index.to_period("M")).last()
     hist = eom.set_index(eom["Date"].dt.to_period("M"))["Bags"].astype(float)
     stocks = pd.concat([hist[hist.index < live.index.min()], live]).sort_index()
-    df = pd.concat([sp.rename("spread"), (stocks / 1000.0).rename("stocks")], axis=1).dropna()
+    df = pd.concat([sp.groupby(sp.index.to_period("M")).mean().rename("spread"), (stocks / 1000.0).rename("stocks")], axis=1).dropna()
     return df[df["stocks"] > 0]
 
 
 def kc_spread_fit(df: pd.DataFrame):
-    """spread = a + b * ln(stocks), least squares (stocks in 000s bags, months with at least 1k bags)."""
+    """spread = a + b * ln(stocks), least squares (stocks in 000s bags, at least 1k bags)."""
     d = df[df["stocks"] >= 1.0]
     b, a = np.polyfit(np.log(d["stocks"].values), d["spread"].values, 1)
     return a, b
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def kc_spread_vs_certs_fig(df: pd.DataFrame, basis: str, height: int = 560) -> go.Figure:
+def kc_spread_vs_certs_fig(df: pd.DataFrame, freq: str = "Monthly", height: int = 560) -> go.Figure:
     a, b = kc_spread_fit(df)
+    monthly = freq == "Monthly"
+    fmt = "%b-%y" if monthly else "%d-%b-%y"
     hist, last = df.iloc[:-1], df.iloc[-1]
-    lab = [p.strftime("%b-%y") for p in hist.index]
+    lab = [p.strftime(fmt) for p in hist.index]
+    last_lab = df.index[-1].strftime(fmt)
+    Scatter = go.Scatter if monthly else go.Scattergl
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=hist["stocks"], y=hist["spread"], mode="markers", name="Months",
-                             marker=dict(symbol="square", size=6, color="#2f78b7"), customdata=lab,
-                             hovertemplate="%{customdata}<br>Certs %{x:,.0f}k bags | Spread %{y:.1f}<extra></extra>"))
+    fig.add_trace(Scatter(x=hist["stocks"], y=hist["spread"], mode="markers", name=freq,
+                          marker=dict(symbol="square", size=6 if monthly else 4, color="#2f78b7",
+                                      opacity=1 if monthly else 0.55),
+                          customdata=lab, hovertemplate="%{customdata}<br>Certs %{x:,.0f}k bags | Spread %{y:.1f}<extra></extra>"))
     xs = np.linspace(max(float(df["stocks"].min()), 1.0), float(df["stocks"].max()), 300)
     fig.add_trace(go.Scatter(x=xs, y=a + b * np.log(xs), mode="lines", name="Fit", line=dict(color="#111111", width=2),
                              hoverinfo="skip"))
-    fig.add_trace(go.Scatter(x=[last["stocks"]], y=[last["spread"]], mode="markers", name=df.index[-1].strftime("%b-%y"),
+    fig.add_trace(go.Scatter(x=[last["stocks"]], y=[last["spread"]], mode="markers", name=last_lab,
                              marker=dict(symbol="square", size=10, color=GREEN, line=dict(color="#111111", width=1)),
-                             hovertemplate=f"{df.index[-1].strftime('%b-%y')} (month to date)<br>Certs %{{x:,.0f}}k bags | "
+                             hovertemplate=f"{last_lab}{' (month to date)' if monthly else ''}<br>Certs %{{x:,.0f}}k bags | "
                                            "Spread %{y:.1f}<extra></extra>"))
-    fig.add_annotation(x=last["stocks"], y=last["spread"], text=f"<b>{df.index[-1].strftime('%b-%y')}</b>", showarrow=True,
+    fig.add_annotation(x=last["stocks"], y=last["spread"], text=f"<b>{last_lab}</b>", showarrow=True,
                        arrowhead=0, ax=28, ay=-30, font=dict(size=12, color="#111111"))
-    chart_layout(fig, f"<b>KC 1/2 Spread vs Cert Stocks</b><br><sup>Monthly average spreads ({basis}), end-month cert stocks, "
-                      f"{df.index[0].strftime('%b %Y')} to date</sup>", height)
+    sub = (f"Monthly average spreads, end-month cert stocks, {df.index[0].strftime('%b %Y')} to date" if monthly else
+           f"Daily spreads vs daily cert stocks, {df.index[0].strftime('%b %Y')} to date")
+    chart_layout(fig, f"<b>KC 1/2 Spread vs Cert Stocks</b><br><sup>{sub}</sup>", height)
     fig.update_layout(showlegend=False, hovermode="closest", margin=dict(t=64, b=8, l=8, r=8),
                       xaxis=dict(title="Cert Stocks (000s Bags)", tickformat=",", rangemode="tozero", gridcolor="rgba(10,36,99,0.06)"),
                       yaxis=dict(title="1/2 Spread (c/lb)", zeroline=True, zerolinecolor="#9aa3b8", gridcolor="rgba(10,36,99,0.08)"))
@@ -2907,12 +2917,12 @@ if commodity == "Coffee":
                 st.radio("View", ["Spread vs Certs"], horizontal=True, label_visibility="collapsed", key="apl_view")
             st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
             pl, eom_h = load_price_link(), load_eom_hist()
-            pl1, pl2, _ = st.columns([2.2, 1, 3])
+            pl1, pl2, _ = st.columns([1.4, 1, 3])
             with pl1:
-                st.markdown("<div class='sb-label' style='margin:0 0 2px'>Spread basis</div>", unsafe_allow_html=True)
-                apl_basis = st.radio("Spread basis", list(KC_SPREAD_BASIS), horizontal=True,
-                                     label_visibility="collapsed", key="apl_basis")
-            apl_df = kc_spread_certs_frame(pl, kc, eom_h, apl_basis)
+                st.markdown("<div class='sb-label' style='margin:0 0 2px'>Frequency</div>", unsafe_allow_html=True)
+                apl_freq = st.radio("Frequency", ["Monthly", "Daily"], horizontal=True,
+                                    label_visibility="collapsed", key="apl_freq")
+            apl_df = kc_spread_certs_frame(pl, kc, eom_h, apl_freq)
             years = sorted({p.year for p in apl_df.index})
             with pl2:
                 st.markdown("<div class='sb-label' style='margin:0 0 2px'>From</div>", unsafe_allow_html=True)
@@ -2920,15 +2930,8 @@ if commodity == "Coffee":
                                         label_visibility="collapsed", key="apl_from")
             if apl_from != "All":
                 apl_df = apl_df[[p.year >= int(apl_from) for p in apl_df.index]]
-            st.plotly_chart(kc_spread_vs_certs_fig(apl_df, apl_basis), width="stretch",
+            st.plotly_chart(kc_spread_vs_certs_fig(apl_df, apl_freq), width="stretch",
                             config={"displayModeBar": False}, key="apl_chart")
-            a_, b_ = kc_spread_fit(apl_df)
-            lm = apl_df.iloc[-1]
-            fitted = a_ + b_ * np.log(max(float(lm["stocks"]), 1.0))
-            st.markdown(f"<div class='card-desc'>{apl_df.index[-1].strftime('%b-%y')} (month to date): average spread "
-                        f"{lm['spread']:.1f} c/lb at {lm['stocks']:,.0f}k bags of certs. The fitted curve says {fitted:.1f}, "
-                        f"so the spread is {lm['spread'] - fitted:+.1f} c/lb versus the curve. Curve: spread = "
-                        f"{a_:.2f} {b_:+.2f} x ln(stocks in 000s bags).</div>", unsafe_allow_html=True)
 
         else:
             g, gdays = load_kc_grading()
