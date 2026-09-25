@@ -793,6 +793,62 @@ def monthly_lots_html(g: pd.DataFrame, m: int = 1) -> str:
     return "".join(out)
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def monthly_grading_certs_html(gr: pd.DataFrame, certs: pd.DataFrame, grade: str = "VG",
+                               height: str = "60vh") -> str:
+    """One row per calendar month: grading lots by origin on the left, LRC total certs change
+    on the right - a single Month column shared by both blocks, so they line up."""
+    lots = gr.groupby([gr["PanelDate"].dt.to_period("M"), "Origin2"])["NoLots"].sum().unstack(fill_value=0)
+    lots_tot = lots.sum(axis=1)
+    origins = list(lots.sum().sort_values(ascending=False).index)
+
+    ser = certs.set_index("Date")[f"LRC-TOT-{grade}"].dropna().astype(float)
+    me = ser.resample("ME").last()
+    chg = me.ffill().diff().dropna()
+    chg.index = chg.index.to_period("M")
+
+    months = sorted(set(lots_tot.index) | set(chg.index), reverse=True)
+    if not months:
+        return "<div class='rwrap' style='padding:14px'>No data.</div>"
+    l_scale = max(lots_tot.max(), 1)
+    c_scale = max(chg.abs().max(), 1) if len(chg) else 1
+
+    def lcell(v):
+        if pd.isna(v) or v == 0:
+            return "<td></td>"
+        v = int(v)
+        return f"<td>{v:,}</td>"
+
+    def totcell(v, sc):
+        v = int(round(v)) if pd.notna(v) else 0
+        bar = f"<i style='width:{v / sc * 100:.1f}%'></i>" if v else ""
+        return f"<td class='cbl'>{bar}<span>{v:,}</span></td>"
+
+    def chgcell(v):
+        if pd.isna(v):
+            return "<td class='na sep'></td>"
+        v = int(round(v))
+        bar = f"<i class='{'up' if v > 0 else 'dn'}' style='width:{abs(v) / c_scale * 50:.1f}%'></i>" if v else ""
+        cls = "pos" if v > 0 else "neg" if v < 0 else ""
+        return f"<td class='cb sep'>{bar}<span class='{cls}'>{v:+,}</span></td>"
+
+    head = ["<div class='rwrap' style='height:", height, "'><table class='rpt'><thead>",
+            "<tr class='h1'><th class='dt' rowspan='2'>Month</th>",
+            f"<th colspan='{len(origins) + 1}'>Lots Graded by Origin</th>",
+            "<th colspan='1' class='sep'>LRC Certs</th></tr><tr class='h2'>"]
+    head += [f"<th>{o}</th>" for o in origins] + ["<th>Total</th><th class='sep'>Change</th></tr></thead><tbody>"]
+
+    body = []
+    for pr in months:
+        row = [f"<tr><td class='d'>{pr.strftime('%b %Y')}</td>"]
+        row += [lcell(lots.loc[pr, o] if pr in lots.index else np.nan) for o in origins]
+        row.append(totcell(lots_tot.get(pr, 0), l_scale))
+        row.append(chgcell(chg.get(pr, np.nan)))
+        row.append("</tr>")
+        body.append("".join(row))
+    return "".join(head) + "".join(body) + "</tbody></table></div>"
+
+
 with st.sidebar:
     st.markdown("<div class='sb-title'>Daily Miner</div>", unsafe_allow_html=True)
     st.markdown("<div class='sb-label'>Commodity</div>", unsafe_allow_html=True)
@@ -983,6 +1039,16 @@ if commodity == "Coffee":
                                     width="stretch", config=gcfg2)
 
         else:
-            st.markdown("<div class='card-desc'>Coming next.</div>", unsafe_allow_html=True)
+            certs = load_rc_certs()
+            gr = load_rc_grading()
+            with st.container(key="rc_view_box"):
+                rcg_view = st.radio("View", ["Data Table", "Visuals", "Seasonality & Distribution"], horizontal=True,
+                                    label_visibility="collapsed", key="rcg_view")
+            st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+
+            if rcg_view == "Data Table":
+                st.markdown(monthly_grading_certs_html(gr, certs), unsafe_allow_html=True)
+            else:
+                st.markdown("<div class='card-desc'>Coming next.</div>", unsafe_allow_html=True)
 else:
     st.markdown(f"<div class='card-desc'>{commodity}: not built yet.</div>", unsafe_allow_html=True)
