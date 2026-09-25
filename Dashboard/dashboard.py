@@ -1309,9 +1309,12 @@ if commodity == "Coffee":
                     i = max(int(np.searchsorted(k_dates, np.datetime64(target), side="right")) - 1, 0)
                     return pd.Timestamp(k_dates[i])
 
-                with st.container(key="ar_dates_box"):
-                    span_pick = st.radio("Change over", ["Day", "Week", "Month", "Custom"], horizontal=True,
-                                         label_visibility="collapsed", key="ar_span")
+                sp_col, _ = st.columns([1, 4])
+                with sp_col:
+                    st.markdown("<div class='sb-label' style='margin:0 0 2px'>Certs Change period</div>",
+                               unsafe_allow_html=True)
+                    span_pick = st.selectbox("Certs Change period", ["Day", "Week", "Month", "Custom"],
+                                             label_visibility="collapsed", key="ar_span")
                 if span_pick == "Day":
                     older_ts, latest_ts = k_prev, k_max
                 elif span_pick == "Week":
