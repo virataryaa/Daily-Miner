@@ -121,6 +121,7 @@ span[data-baseweb="tag"] svg { fill: #ffffff !important; }
 .rpt thead tr.h2 th { top: 24px; height: 22px; background: #0f2c70; }
 .rpt thead tr.h3 th { top: 46px; height: 22px; }
 .rpt thead th.gs { border-left: 1px solid rgba(255,255,255,.28); }
+.rpt.static thead th { position: static; }  /* small non-scrolling tables: avoid a sticky-header/first-row overlap quirk */
 .rpt thead th.certs-hdr { background: #9c6a17 !important; }
 .rpt td.gs { border-left: 1px solid #dfe3ee; }
 .rpt thead th.dt { top: 0; z-index: 3; }
@@ -218,7 +219,7 @@ def kc_change_matrix_html(df: pd.DataFrame, older: pd.Timestamp, latest: pd.Time
         cls2 = "pos" if v > 0 else "neg"
         return f"<td class='{cls}'><span class='{cls2}'>{v:+,.0f}</span></td>"
 
-    head = ["<div class='rwrap' style='height:auto'><table class='rpt'><thead><tr class='h2'>",
+    head = ["<div class='rwrap' style='height:auto'><table class='rpt static'><thead><tr class='h2'>",
             "<th class='dt l'>Origin</th>"]
     head += [f"<th>{KC_PORT_NAMES[p]}</th>" for p in ports] + ["<th class='sep'>Total</th></tr></thead><tbody>"]
     body = []
@@ -273,7 +274,7 @@ def kc_latest_matrix_html(df: pd.DataFrame, latest: pd.Timestamp) -> str:
         alpha = min(pct / pmax, 1.0) * 0.85
         return f"<td class='{cls}' style='background:rgba(31,157,111,{alpha:.2f})'>{pct:.0f}%</td>"
 
-    head = ["<div class='rwrap' style='height:auto'><table class='rpt'><thead><tr class='h2'>",
+    head = ["<div class='rwrap' style='height:auto'><table class='rpt static'><thead><tr class='h2'>",
             "<th class='dt l'>Origin</th>"]
     head += [f"<th>{KC_PORT_NAMES[p]}</th>" for p in ports] + [
         "<th class='sep'>Total</th><th class='sep'>Origin %</th></tr></thead><tbody>"]
@@ -1269,10 +1270,11 @@ if commodity == "Coffee":
 
         if ar_view == "Matrix":
             k_min, k_max = kc["Date"].min(), kc["Date"].max()
+            k_prev = kc["Date"].iloc[-2] if len(kc) > 1 else k_max  # previous trading day, not just latest-1
             dc1, dc2, _ = st.columns([1, 1, 4])
             with dc1:
                 st.markdown("<div class='sb-label' style='margin:0 0 2px'>Older Date</div>", unsafe_allow_html=True)
-                older_pick = st.date_input("Older date", value=(k_max - pd.Timedelta(days=7)).date(),
+                older_pick = st.date_input("Older date", value=k_prev.date(),
                                            min_value=k_min.date(), max_value=k_max.date(),
                                            key="ar_older", label_visibility="collapsed")
             with dc2:
@@ -1438,7 +1440,7 @@ if commodity == "Coffee":
                 top3, rest = origin_rank[:3], origin_rank[3:]
                 cm_col, _ = st.columns([1, 5])
                 with cm_col:
-                    crop_pick = st.selectbox("Crop year starts", MONTH_ABBR, index=9, key="rg_crop_m")
+                    crop_pick = st.selectbox("Crop year starts", MONTH_ABBR, index=6, key="rg_crop_m")
                 crop_m = MONTH_ABBR.index(crop_pick) + 1
                 g_first, g_last = gr["PanelDate"].min(), gr["PanelDate"].max()
                 q1, q2, q3, q4 = st.columns(4)
@@ -1503,7 +1505,7 @@ if commodity == "Coffee":
                 ucfg = {"displayModeBar": False}
                 ucm_col, _ = st.columns([1, 5])
                 with ucm_col:
-                    ucm_pick = st.selectbox("Cumulative starts", MONTH_ABBR, index=9, key="rcg_crop_m")
+                    ucm_pick = st.selectbox("Cumulative starts", MONTH_ABBR, index=6, key="rcg_crop_m")
                 ucm = MONTH_ABBR.index(ucm_pick) + 1
                 u1, u2 = st.columns(2)
                 with u1:
