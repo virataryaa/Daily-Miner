@@ -174,6 +174,9 @@ span[data-baseweb="tag"] svg { fill: #ffffff !important; }
 .rpt.cmp td { padding: 1px 5px; }
 .rpt.cmp thead th { padding: 3px 5px; font-size: 9.5px; }
 .rpt.cmp td.cbl, .rpt.cmp td.cb { min-width: 46px; }
+.rpt.big { font-size: 13.5px; }
+.rpt.big td { padding: 8px 14px; min-width: 62px; }
+.rpt.big thead th { padding: 8px 14px; font-size: 12.5px; top: 0 !important; }
 .mt.side { margin-top: 30px; }
 </style>
 """,
@@ -1730,7 +1733,7 @@ def kc_passrate_matrix_html(pm: pd.Series, fm: pd.Series, m: int = 7) -> str:
         r, gr, b = _rate_rgb(float(v))
         return f"<td class='{cls}' style='background:rgb({r},{gr},{b})'>{v:.0f}%</td>"
 
-    out = ["<div class='rwrap' style='height:auto'><table class='rpt mx cmp'><thead><tr class='h2'>"
+    out = ["<div class='rwrap' style='height:auto'><table class='rpt mx big'><thead><tr class='h2'>"
            f"<th class='dt'>{'Year' if m == 1 else 'Crop yr'}</th>"]
     out += [f"<th>{MONTH_ABBR[mo - 1].upper()}</th>" for mo in months] + ["<th class='sep'>Year</th></tr></thead><tbody>"]
     for yr in rate.index:
@@ -2470,14 +2473,6 @@ if commodity == "Coffee":
                 st.plotly_chart(kc_gr_pf_bars_fig(mf, f"Passed / Failed Proportion by Month | {lbl}", proportion=True),
                                 width="stretch", config=gcfg)
 
-                mx1, _ = st.columns([1, 5])
-                with mx1:
-                    st.markdown("<div class='sb-label' style='margin:0 0 2px'>Crop year starts</div>", unsafe_allow_html=True)
-                    rcm = MONTH_ABBR.index(st.selectbox("Pass rate crop year starts", MONTH_ABBR, index=6,
-                                                        label_visibility="collapsed", key="arr_crop_m")) + 1
-                st.markdown(f"<div class='mt'>Pass Rate Per Origin | {lbl}</div>", unsafe_allow_html=True)
-                st.markdown(kc_passrate_matrix_html(mf["Passed"], mf["Failed"], rcm), unsafe_allow_html=True)
-                st.markdown("<div style='height:22px'></div>", unsafe_allow_html=True)
                 rs1, _ = st.columns([2.6, 4])
                 with rs1:
                     r_span = st.radio("Pass rate period", ["3M", "6M", "1Y", "All", "Custom"], index=0, horizontal=True,
@@ -2498,6 +2493,10 @@ if commodity == "Coffee":
                 st.plotly_chart(kc_gr_rate_bar_fig(kc_gr_day_pf(g, gdays, r_or, r_po),
                                                    f"Pass Rate by Day | {lbl} (label = bags passed)", rs_, re_),
                                 width="stretch", config=gcfg)
+
+                st.markdown("<div style='height:30px'></div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='mt'>Pass Rate Per Origin | {lbl}</div>", unsafe_allow_html=True)
+                st.markdown(kc_passrate_matrix_html(mf["Passed"], mf["Failed"], 1), unsafe_allow_html=True)
 
         else:
             g, gdays = load_kc_grading()
