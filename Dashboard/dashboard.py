@@ -385,6 +385,12 @@ def fmt_int(v):
 # ------------------------------------------------------------------ KC (Arabica) visuals
 KC_PORT_COLORS = {"AN": NAVY, "NY": TEAL, "MI": AMBER, "HO": "#9b6bb3", "NO": RED, "BA": GREEN, "HA": "#6b7fb5"}
 
+# 16-Nov to 30-Dec 2011: every KC origin AND port RIC except KC-TOT-AN went NaN in LSEG's own
+# history for this ~6-week window, while KC-TOT-TOT kept updating fine - a one-off archive hole,
+# not a recurring glitch. Forward-filling something that long would be fabricating data, so the
+# origin/port breakdown charts (not the Total Certs one, which is unaffected) start after it clears.
+KC_BREAKDOWN_START = "2012-01-01"
+
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def kc_major_ports(df: pd.DataFrame, min_share: float = 0.01) -> list:
@@ -422,6 +428,7 @@ def kc_total_certs_fig(df: pd.DataFrame) -> go.Figure:
 @st.cache_data(ttl=3600, show_spinner=False)
 def kc_ports_certs_fig(df: pd.DataFrame) -> go.Figure:
     """Stacked area of certs per port (biggest at the bottom); minor ports pooled into Other."""
+    df = df[df["Date"] >= KC_BREAKDOWN_START]
     majors = kc_major_ports(df)
     minors = [p for p in KC_PORT_NAMES if p not in majors]
     fig = go.Figure()
@@ -446,6 +453,7 @@ def kc_ports_certs_fig(df: pd.DataFrame) -> go.Figure:
 def kc_origin_mix_fig(df: pd.DataFrame, show_all: bool = False, top_n: int = 5) -> go.Figure:
     """Stacked area of certs per origin. Aggregated to Top-N + Other by default; the 'show all
     origins' toggle expands to all 16."""
+    df = df[df["Date"] >= KC_BREAKDOWN_START]
     order, colors = kc_origin_palette(df)
     shown = order if show_all else order[:top_n]
     minors = [] if show_all else order[top_n:]
@@ -470,6 +478,7 @@ def kc_origin_mix_fig(df: pd.DataFrame, show_all: bool = False, top_n: int = 5) 
 def kc_origin_share_fig(df: pd.DataFrame, show_all: bool = False, top_n: int = 5) -> go.Figure:
     """Each origin's share of total certs (%) over time, as lines. Same Top-N + Other aggregation
     as the mix chart above it."""
+    df = df[df["Date"] >= KC_BREAKDOWN_START]
     order, colors = kc_origin_palette(df)
     shown = order if show_all else order[:top_n]
     minors = [] if show_all else order[top_n:]
