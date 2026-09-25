@@ -70,8 +70,16 @@ div[role="radiogroup"] { background: #eef0f6; padding: 3px; border-radius: 999px
 div[role="radiogroup"] label { background: transparent !important; border-radius: 999px !important; padding: 2px 10px !important; margin: 0 !important; }
 div[role="radiogroup"] label[data-baseweb="radio"] > div:first-child { display: none; }
 div[role="radiogroup"] label div[data-testid="stMarkdownContainer"] p { font-size: 11.5px !important; color: #5a6688; }
-div[role="radiogroup"] label:has(input:checked) { background: #0a2463 !important; }
+/* Default selected-pill colour: a muted grey. Reserved for filter-type radios (History, Rolling
+   window, Certs lag, Day/Week/Month, ...) and the third-level View tabs, so the visual weight
+   fades as you go deeper - only the top navigation levels below keep their own bold colour. */
+div[role="radiogroup"] label:has(input:checked) { background: #6b7690 !important; }
 div[role="radiogroup"] label:has(input:checked) div[data-testid="stMarkdownContainer"] p { color: #ffffff !important; font-weight: 600; }
+
+/* Level 2 (Certs / Grading / Certs & Grading, and the Commodity sidebar list) stays bold navy -
+   it's still primary navigation, not a filter. */
+.st-key-rc_section_box div[role="radiogroup"] label:has(input:checked),
+[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) { background: #0a2463 !important; }
 
 /* Section / View pill radios: these replace st.tabs so only the picked branch runs each rerun
    (a real st.tabs renders every tab's body on every rerun; this radio does not). */
