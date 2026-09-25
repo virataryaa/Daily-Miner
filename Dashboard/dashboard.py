@@ -2439,7 +2439,7 @@ if commodity == "Coffee":
                     with col_:
                         s_ = m_w.sum(axis=1) if o == "Total" else m_w[o]
                         st.plotly_chart(kc_cum_lines_cached(s_, f"{o} | cumulative {m_lbl}", scm, g_max),
-                                        width="stretch", config=gcfg)
+                                        width="stretch", config=gcfg, key=f"arg_cum_o_{o}")
 
                 st.markdown("<div class='sec'>Per Port</div>", unsafe_allow_html=True)
                 for col_, p_ in zip(st.columns(4), list(m_p.columns[:3]) + [fourth_p]):
@@ -2447,14 +2447,14 @@ if commodity == "Coffee":
                         s_ = m_p.sum(axis=1) if p_ == "Total" else m_p[p_]
                         ttl = p_ if p_ == "Total" else f"{p_} ({KC_GR_PORT_COUNTRY[p_]})"
                         st.plotly_chart(kc_cum_lines_cached(s_, f"{ttl} | cumulative {m_lbl}", scm, g_max),
-                                        width="stretch", config=gcfg)
+                                        width="stretch", config=gcfg, key=f"arg_cum_p_{p_}")
 
                 st.markdown("<div class='sec'>Per Country of Port</div>", unsafe_allow_html=True)
                 for col_, ct in zip(st.columns(4), ["Belgium", "Spain", "Germany", "USA"]):
                     with col_:
                         cs = m_p.reindex(columns=[p_ for p_ in KC_GR_PORTS if KC_GR_PORT_COUNTRY[p_] == ct], fill_value=0).sum(axis=1)
                         st.plotly_chart(kc_cum_lines_cached(cs, f"{ct} | cumulative {m_lbl}", scm, g_max),
-                                        width="stretch", config=gcfg)
+                                        width="stretch", config=gcfg, key=f"arg_cum_c_{ct}")
 
             elif ar_g_view == "Pending":
                 dn1, dn2 = st.columns(2)
@@ -2581,7 +2581,7 @@ if commodity == "Coffee":
                     with col_:
                         st.plotly_chart(kc_cum_lines_cached(du["Usage"] if o == "Total" else uo[o],
                                                             f"{o} | cumulative usage", ucm, last),
-                                        width="stretch", config=ucfg)
+                                        width="stretch", config=ucfg, key=f"acg_cum_o_{o}")
 
                 st.markdown("<div class='sec'>Per Port</div>", unsafe_allow_html=True)
                 p_order = list(up.sum().sort_values(ascending=False).index)
@@ -2594,14 +2594,14 @@ if commodity == "Coffee":
                         ttl = p_ if p_ == "Total" else f"{p_} ({KC_GR_PORT_COUNTRY[p_]})"
                         st.plotly_chart(kc_cum_lines_cached(du["Usage"] if p_ == "Total" else up[p_],
                                                             f"{ttl} | cumulative usage", ucm, last),
-                                        width="stretch", config=ucfg)
+                                        width="stretch", config=ucfg, key=f"acg_cum_p_{p_}")
 
                 st.markdown("<div class='sec'>Per Country of Port</div>", unsafe_allow_html=True)
                 for col_, ct in zip(st.columns(4), ["Belgium", "Spain", "Germany", "USA"]):
                     with col_:
                         cs = up[[p_ for p_ in KC_GR_PORTS if KC_GR_PORT_COUNTRY[p_] == ct]].sum(axis=1)
                         st.plotly_chart(kc_cum_lines_cached(cs, f"{ct} | cumulative usage", ucm, last),
-                                        width="stretch", config=ucfg)
+                                        width="stretch", config=ucfg, key=f"acg_cum_c_{ct}")
 
                 st.markdown("<div class='sec'>Monthly Usage by Origin</div>", unsafe_allow_html=True)
                 u_all = st.radio("Usage origins", ["Top 5 + Other", "Show all origins"], horizontal=True,
