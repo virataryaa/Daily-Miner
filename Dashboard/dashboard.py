@@ -1918,13 +1918,12 @@ def kc_queue_frame(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame) -> pd.Dat
 
 
 def _cg_queue_cells(q, sc: dict) -> str:
-    """Grading Queue group: Failed | Pending | Certs level | Fresh Pending."""
+    """Grading Queue group: Pending | Certs level | Fresh Pending."""
     if q is None:
-        return "<td class='na sep'></td><td class='na'></td><td class='na'></td><td class='na'></td>"
+        return "<td class='na sep'></td><td class='na'></td><td class='na'></td>"
     pend = "" if pd.isna(q["Pending"]) or not q["Pending"] else _fmt_i(q["Pending"])
     cert = "" if pd.isna(q["Certs"]) else _fmt_i(q["Certs"])
-    return (_heat_td(q["Failed"], sc["qf"], "201,74,74").replace("<td", "<td class='sep'", 1)
-            + f"<td>{pend}</td><td class='tot'>{cert}</td>" + _heat_td(q["Fresh"], sc["qfp"]))
+    return (f"<td class='sep'>{pend}</td><td class='tot'>{cert}</td>" + _heat_td(q["Fresh"], sc["qfp"]))
 
 
 def _queue_scales(q: pd.DataFrame) -> dict:
@@ -1942,7 +1941,7 @@ def _cg_head(first_col: str, cols: list, with_rate: bool = False, with_queue: bo
     h += [f"<th colspan='{n}' class='sep certs-hdr'>Certs Change by Origin</th>",
           f"<th colspan='{n}' class='sep certs-hdr'>Usage by Origin</th>"]
     if with_queue:
-        h.append("<th colspan='4' class='sep'>Grading Queue</th>")
+        h.append("<th colspan='3' class='sep'>Grading Queue</th>")
     h.append("</tr><tr class='h2'>")
     groups = 4 if with_rate else 3
     for grp in range(groups):
@@ -1954,7 +1953,7 @@ def _cg_head(first_col: str, cols: list, with_rate: bool = False, with_queue: bo
             lbl = (_ABBR.get(o, o[:3].upper()) if o != "Total" else "Tot") if is_pr else o
             h.append(f"<th class='{cls.strip()}'>{lbl}</th>" if cls.strip() else f"<th>{lbl}</th>")
     if with_queue:
-        h.append("<th class='sep'>Failed</th><th>Pending</th><th>Certs</th><th>Fresh Pending</th>")
+        h.append("<th class='sep'>Pending</th><th>Certs</th><th>Fresh Pending</th>")
     h.append("</tr></thead><tbody>")
     return h
 
@@ -2136,7 +2135,7 @@ def _cg_port_head(first_col: str, cols: list, with_rate: bool = False, with_queu
     for gi, (title, certs) in enumerate(blocks):
         h.append(f"<th colspan='{n}'{' class=certs-hdr' if certs else ''}{' style=' + repr(edge) if gi else ''}>{title}</th>")
     if with_queue:
-        h.append(f"<th colspan='4' style={edge!r}>Grading Queue</th>")
+        h.append(f"<th colspan='3' style={edge!r}>Grading Queue</th>")
     h.append("</tr><tr class='h2'>")
     for gi in range(len(blocks)):
         for i, (ct, k) in enumerate(groups):
@@ -2147,8 +2146,7 @@ def _cg_port_head(first_col: str, cols: list, with_rate: bool = False, with_queu
         tcls = "certs-hdr" if blocks[gi][1] else ("pr" if (with_rate and gi == 1) else "")
         h.append(f"<th rowspan='2'{' class=' + tcls if tcls else ''}>{'Tot' if (with_rate and gi == 1) else 'Total'}</th>")
     if with_queue:
-        h.append(f"<th rowspan='2' style={edge!r}>Failed</th><th rowspan='2'>Pending</th><th rowspan='2'>Certs</th>"
-                 "<th rowspan='2'>Fresh Pending</th>")
+        h.append(f"<th rowspan='2' style={edge!r}>Pending</th><th rowspan='2'>Certs</th><th rowspan='2'>Fresh Pending</th>")
     h.append("</tr><tr class='h3'>")
     for gi in range(len(blocks)):
         k = 0
