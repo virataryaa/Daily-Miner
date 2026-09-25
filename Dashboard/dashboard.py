@@ -442,10 +442,20 @@ def share_pie_fig(df: pd.DataFrame, grade: str = "VG") -> go.Figure:
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def seasonality_fig(df: pd.DataFrame, col: str, title: str) -> go.Figure:
-    """Day-of-year seasonality: history bands (min-max, 10-90, 25-75 pct), average,
-    last year in red and the current year in navy (same styling as Cotton On-Call)."""
+    """Day-of-year seasonality for a stock level (Certs, etc): thin wrapper around
+    _dayofyear_bands_fig with weekends/holidays forward-filled from the last known level."""
     s = df.set_index("Date")[col].dropna().astype(float)
-    w = s.resample("D").last().ffill().to_frame("v")
+    w = s.resample("D").last().ffill()
+    return _dayofyear_bands_fig(w, title)
+
+
+def _dayofyear_bands_fig(s: pd.Series, title: str, height: int = 440) -> go.Figure:
+    """Day-of-year seasonality: history bands (min-max, 10-90, 25-75 pct), average,
+    last year in red and the current year in navy (same styling as Cotton On-Call).
+    `s` should already be the series to plot as-is - a level series should be ffilled by the
+    caller first; a flow/change series (e.g. Usage) should be left sparse so days without data
+    (weekends) don't fabricate repeated or zero values in the bands."""
+    w = s.dropna().to_frame("v")
     w["x"], w["yr"] = w.index.dayofyear, w.index.year
     w = w[w["x"] <= 365]
     cur = int(w["yr"].max())
@@ -468,7 +478,7 @@ def seasonality_fig(df: pd.DataFrame, col: str, title: str) -> go.Figure:
         if not g.empty:
             fig.add_trace(go.Scatter(x=g["x"], y=g["v"], mode="lines", name=str(yr), line=dict(color=color, width=width),
                                      hovertemplate="%{y:,.0f}<extra>" + str(yr) + "</extra>"))
-    chart_layout(fig, title, height=440)
+    chart_layout(fig, title, height)
     fig.update_layout(xaxis=dict(title="Day of year", dtick=30, range=[1, 365]),
                       legend=dict(y=-0.28))
     return fig
@@ -712,11 +722,18 @@ def crop_label(yr: int, m: int) -> str:
 @st.cache_data(ttl=3600, show_spinner=False)
 def crop_seasonality_fig(g_sel: pd.DataFrame, title: str, m: int, first: pd.Timestamp, last: pd.Timestamp,
                          height: int = 360) -> go.Figure:
-    """Cumulative lots graded through the crop year (resets on the 1st of month m), history bands from
-    past crop years, previous crop year in red, current one in navy. Crop years that began before the
-    data did are skipped so no partial year distorts the bands."""
-    fig = go.Figure()
+    """Cumulative lots graded through the crop year (resets on the 1st of month m). Thin wrapper
+    around _cumulative_bands_fig for the grading dataframe shape."""
     s = g_sel.groupby("PanelDate")["NoLots"].sum()
+    return _cumulative_bands_fig(s, title, m, first, last, height)
+
+
+def _cumulative_bands_fig(s: pd.Series, title: str, m: int, first: pd.Timestamp, last: pd.Timestamp,
+                          height: int = 360) -> go.Figure:
+    """Cumulative sum of a daily flow through the crop/calendar year (resets on the 1st of month m),
+    history bands from past years, previous year in red, current one in navy. Years that began
+    before the data did are skipped so no partial year distorts the bands."""
+    fig = go.Figure()
     first_cy = first.year if first.month >= m else first.year - 1
     start0 = pd.Timestamp(year=first_cy, month=m, day=1)
     if (first - start0).days > 45:
@@ -755,6 +772,92 @@ def crop_seasonality_fig(g_sel: pd.DataFrame, title: str, m: int, first: pd.Time
     fig.update_layout(xaxis=dict(tickmode="array", tickvals=list(offs[::2]),
                                  ticktext=[MONTH_ABBR[order[i]] for i in range(0, 12, 2)], range=[1, 365]),
                       legend=dict(font=dict(size=10)))
+    return fig
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def usage_cumulative_fig(daily_usage: pd.Series, first: pd.Timestamp, last: pd.Timestamp,
+                         height: int = 360) -> go.Figure:
+    """Cumulative Usage (Grading - Certs change), year to date, resetting 1 January."""
+    return _cumulative_bands_fig(daily_usage, "Cumulative Usage (YTD)", 1, first, last, height)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def usage_daily_fig(daily_usage: pd.Series, height: int = 360) -> go.Figure:
+    """Daily Usage, navy line."""
+    s = daily_usage.dropna()
+    fig = go.Figure(go.Scatter(x=s.index, y=s.values, mode="lines", line=dict(color=NAVY, width=1.4),
+                               hovertemplate="%{y:+,.0f}<extra></extra>"))
+    fig.add_hline(y=0, line=dict(color="#c5cbdd", width=1))
+    chart_layout(fig, "Daily Usage", height)
+    fig.update_layout(yaxis=dict(tickformat="+,"))
+    return fig
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def usage_seasonality_fig(daily_usage: pd.Series, height: int = 440) -> go.Figure:
+    """Day-of-year seasonality of daily Usage (not cumulative): history bands, average,
+    last year red, current year navy."""
+    return _dayofyear_bands_fig(daily_usage, "Daily Usage Seasonality", height)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def monthly_usage_html(daily_usage: pd.Series, height: str = "auto") -> str:
+    """Year x month matrix of total Usage per month, signed bars, YEAR total column."""
+    tbl = daily_usage.groupby([daily_usage.index.year, daily_usage.index.month]).sum().unstack()
+    tbl = tbl.reindex(columns=range(1, 13))
+    year_tot = tbl.sum(axis=1, min_count=1)
+    scale = max(tbl.abs().max().max(), 1)
+    yscale = max(year_tot.abs().max(), 1)
+
+    def cell(v, sc, cls="cb"):
+        if pd.isna(v):
+            return "<td class='na'></td>"
+        v = int(round(v))
+        if v == 0:
+            return f"<td class='{cls}'><span></span></td>"
+        w = abs(v) / sc * 50
+        bar = f"<i class='{'up' if v > 0 else 'dn'}' style='width:{w:.1f}%'></i>"
+        return f"<td class='{cls}'>{bar}<span class='{'pos' if v > 0 else 'neg'}'>{v:+,}</span></td>"
+
+    months_u = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+    out = [f"<div class='rwrap' style='height:{height}'><table class='rpt mx'><thead><tr class='h2'><th class='dt'>Year</th>"]
+    out += [f"<th>{m}</th>" for m in months_u] + ["<th class='sep'>Year</th></tr></thead><tbody>"]
+    for yr in tbl.index:
+        row = [f"<tr><td class='d'>{yr}</td>"]
+        row += [cell(tbl.loc[yr, m], scale) for m in range(1, 13)]
+        row.append(cell(year_tot[yr], yscale, "cb sep"))
+        row.append("</tr>")
+        out.append("".join(row))
+    out.append("</tbody></table></div>")
+    return "".join(out)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def usage_by_origin_fig(gr: pd.DataFrame, certs: pd.DataFrame, grade: str = "VG", height: int = 380) -> go.Figure:
+    """Monthly Usage split by origin (Brazil/Vietnam/Indonesia/Other), each origin's usage taken as
+    its share of that month's total lots graded, applied to the month's total Usage."""
+    lots_o = gr.groupby([gr["PanelDate"].dt.to_period("M"), "Origin2"])["NoLots"].sum().unstack(fill_value=0)
+    lots_tot = lots_o.sum(axis=1)
+    share = lots_o.div(lots_tot.replace(0, np.nan), axis=0).fillna(0)
+
+    ser = certs.set_index("Date")[f"LRC-TOT-{grade}"].dropna().astype(float)
+    chg = ser.resample("ME").last().ffill().diff().dropna()
+    chg.index = chg.index.to_period("M")
+    months = sorted(set(lots_tot.index) & set(chg.index))
+    usage_tot = lots_tot.reindex(months) - chg.reindex(months)
+
+    origins = list(lots_o.sum().sort_values(ascending=False).index)
+    xs = [str(p) for p in months]
+    fig = go.Figure()
+    for o in origins:
+        y = (share.reindex(months)[o].fillna(0) * usage_tot).values
+        fig.add_trace(go.Bar(x=xs, y=y, name=o, marker_color=GRADING_ORIGIN_COLORS.get(o, GREY),
+                             hovertemplate="%{y:+,.0f}<extra>" + o + "</extra>"))
+    chart_layout(fig, "Monthly Usage by Origin (origin's share of that month's grading)", height)
+    fig.update_layout(barmode="relative", bargap=0.25,
+                      xaxis=dict(type="category", tickangle=-90, tickfont=dict(size=9)),
+                      yaxis=dict(tickformat="+,"))
     return fig
 
 
@@ -798,6 +901,27 @@ def monthly_lots_html(g: pd.DataFrame, m: int = 1) -> str:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
+def daily_usage_series(gr: pd.DataFrame, certs: pd.DataFrame, grade: str = "VG", lag: int = 1) -> pd.Series:
+    """Daily Usage = Grading - Certs change, certs change looked up `lag` certs-trading-days ahead
+    (default 1, matching the Data Table default). Covers every certs day from the grading feed's
+    own start onward; days with no panel that day count as 0 lots graded."""
+    lots_tot = gr.groupby("PanelDate")["NoLots"].sum()
+    ser = certs.set_index("Date")[f"LRC-TOT-{grade}"].dropna().astype(float)
+    chg = ser.diff().dropna()
+    cd = list(chg.index.sort_values())
+
+    def lagged(d):
+        i = np.searchsorted(cd, d) + lag
+        return chg.loc[cd[i]] if 0 <= i < len(cd) else np.nan
+
+    g_start = gr["PanelDate"].min()
+    idx = pd.DatetimeIndex(sorted(d for d in cd if d >= g_start))
+    g_on_day = lots_tot.reindex(idx, fill_value=0)
+    c_lagged = pd.Series([lagged(d) for d in idx], index=idx, dtype=float)
+    return (g_on_day - c_lagged).dropna()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def monthly_grading_certs_html(gr: pd.DataFrame, certs: pd.DataFrame, grade: str = "VG",
                                height: str = "60vh") -> str:
     """One row per calendar month, capped to the grading feed's own range (it starts Jan 2022;
@@ -809,8 +933,12 @@ def monthly_grading_certs_html(gr: pd.DataFrame, certs: pd.DataFrame, grade: str
     origins = list(lots.sum().sort_values(ascending=False).index)
 
     ser = certs.set_index("Date")[f"LRC-TOT-{grade}"].dropna().astype(float)
-    me = ser.resample("ME").last()
-    chg = me.ffill().diff().dropna()
+    me = ser.resample("ME").last().ffill()
+    level = me.copy()
+    level.index = level.index.to_period("M")
+    avg_level = ser.resample("ME").mean()
+    avg_level.index = avg_level.index.to_period("M")
+    chg = me.diff().dropna()
     chg.index = chg.index.to_period("M")
 
     g_start = gr["PanelDate"].min().to_period("M")
@@ -821,6 +949,8 @@ def monthly_grading_certs_html(gr: pd.DataFrame, certs: pd.DataFrame, grade: str
     c_scale = max(chg.abs().max(), 1) if len(chg) else 1
     usage = lots_tot.reindex(chg.index, fill_value=0) - chg
     u_scale = max(usage.abs().max(), 1) if len(usage) else 1
+    usage_pct = usage / avg_level.reindex(usage.index) * 100
+    p_scale = max(usage_pct.abs().max(), 1) if len(usage_pct) and usage_pct.notna().any() else 1
 
     all_max = max(float(lots[origins].max().max()), 1.0)
 
@@ -838,11 +968,11 @@ def monthly_grading_certs_html(gr: pd.DataFrame, certs: pd.DataFrame, grade: str
 
     def chgcell(v):
         if pd.isna(v):
-            return "<td class='na sep'></td>"
+            return "<td class='na'></td>"
         v = int(round(v))
         bar = f"<i class='{'up' if v > 0 else 'dn'}' style='width:{abs(v) / c_scale * 50:.1f}%'></i>" if v else ""
         cls = "pos" if v > 0 else "neg" if v < 0 else ""
-        return f"<td class='cb sep'>{bar}<span class='{cls}'>{v:+,}</span></td>"
+        return f"<td class='cb'>{bar}<span class='{cls}'>{v:+,}</span></td>"
 
     def usecell(g, c):
         # Usage = Grading - Certs change: lots graded that weren't offset by a matching rise in
@@ -855,20 +985,37 @@ def monthly_grading_certs_html(gr: pd.DataFrame, certs: pd.DataFrame, grade: str
         cls = "pos" if v > 0 else "neg" if v < 0 else ""
         return f"<td class='cb'>{bar}<span class='{cls}'>{v:+,}</span></td>"
 
-    head = ["<div class='mt' style='margin-bottom:4px'>Grading (lots) & LRC Certified Stocks Change (lots), by month</div>",
+    def levelcell(v):
+        if pd.isna(v):
+            return "<td class='na sep'></td>"
+        return f"<td class='tot sep'>{int(round(v)):,}</td>"
+
+    def pctcell(v):
+        if pd.isna(v):
+            return "<td class='na'></td>"
+        bar = f"<i class='{'up' if v > 0 else 'dn'}' style='width:{abs(v) / p_scale * 50:.1f}%'></i>" if v else ""
+        cls = "pos" if v > 0 else "neg" if v < 0 else ""
+        return f"<td class='cb'>{bar}<span class='{cls}'>{v:+.1f}%</span></td>"
+
+    head = ["<div class='mt' style='margin-bottom:4px'>Grading (lots) & LRC Certified Stocks Change (lots), by month. "
+            "Usage % is Usage divided by that month's average certs level.</div>",
             "<div class='rwrap' style='height:", height, "'><table class='rpt'><thead>",
             "<tr class='h1'><th class='dt' rowspan='2'>Month</th>",
             f"<th colspan='{len(origins) + 1}'>Lots Graded by Origin</th>",
-            "<th colspan='2' class='sep certs-hdr'>LRC Certs</th></tr><tr class='h2'>"]
-    head += [f"<th>{o}</th>" for o in origins] + ["<th>Total</th><th class='sep certs-hdr'>Change</th><th class='certs-hdr'>Usage</th></tr></thead><tbody>"]
+            "<th colspan='4' class='sep certs-hdr'>LRC Certs</th></tr><tr class='h2'>"]
+    head += [f"<th>{o}</th>" for o in origins] + [
+        "<th>Total</th><th class='sep certs-hdr'>Level</th><th class='certs-hdr'>Change</th>",
+        "<th class='certs-hdr'>Usage</th><th class='certs-hdr'>Usage %</th></tr></thead><tbody>"]
 
     body = []
     for pr in months:
         row = [f"<tr><td class='d'>{pr.strftime('%b %Y')}</td>"]
         row += [lcell(lots.loc[pr, o] if pr in lots.index else np.nan) for o in origins]
         row.append(totcell(lots_tot.get(pr, 0), l_scale))
+        row.append(levelcell(level.get(pr, np.nan)))
         row.append(chgcell(chg.get(pr, np.nan)))
         row.append(usecell(lots_tot.get(pr, np.nan), chg.get(pr, np.nan)))
+        row.append(pctcell(usage_pct.get(pr, np.nan)))
         row.append("</tr>")
         body.append("".join(row))
     return "".join(head) + "".join(body) + "</tbody></table></div>"
@@ -1167,7 +1314,30 @@ if commodity == "Coffee":
                         lag_pick = st.radio("Certs lag", ["0d", "1d"], index=1, horizontal=True,
                                             label_visibility="collapsed", key="rcg_lag")
                 st.markdown(daily_grading_certs_html(gr, certs, lag=int(lag_pick[0])), unsafe_allow_html=True)
+            elif rcg_view == "Visuals":
+                du = daily_usage_series(gr, certs)
+                u_min, u_max = du.index.min(), du.index.max()
+                ucfg = {"displayModeBar": False}
+                u1, u2 = st.columns(2)
+                with u1:
+                    st.plotly_chart(usage_daily_fig(du), width="stretch", config=ucfg)
+                with u2:
+                    st.plotly_chart(usage_cumulative_fig(du, u_min, u_max), width="stretch", config=ucfg)
+                st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+                st.plotly_chart(usage_by_origin_fig(gr, certs), width="stretch", config=ucfg)
             else:
-                st.markdown("<div class='card-desc'>Coming next.</div>", unsafe_allow_html=True)
+                du = daily_usage_series(gr, certs)
+                scfg = {"displayModeBar": False}
+                s1, s2 = st.columns([2, 3])
+                with s1:
+                    st.plotly_chart(usage_seasonality_fig(du), width="stretch", config=scfg)
+                with s2:
+                    st.markdown("<div class='mt side'>Monthly Usage</div>", unsafe_allow_html=True)
+                    st.markdown(monthly_usage_html(du), unsafe_allow_html=True)
+                st.markdown("<div style='height:36px'></div>", unsafe_allow_html=True)
+                _dl, dd, _dr = st.columns([1, 2, 1])
+                with dd:
+                    st.plotly_chart(distribution_fig(du, "Daily Usage Distribution", "chg"),
+                                    width="stretch", config=scfg)
 else:
     st.markdown(f"<div class='card-desc'>{commodity}: not built yet.</div>", unsafe_allow_html=True)
