@@ -1282,58 +1282,80 @@ if commodity == "Coffee":
     if coffee_section == "Arabica":
         kc = load_kc_certs()
         with st.container(key="rc_section_box"):
-            ar_view = st.radio("Arabica view", ["Matrix", "Visuals", "Seasonals & Distribution"], horizontal=True,
-                               label_visibility="collapsed", key="ar_view")
+            ar_section = st.radio("Arabica section", ["Certs", "Grading", "Certs & Grading"], horizontal=True,
+                                  label_visibility="collapsed", key="ar_section")
         st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
-        if ar_view == "Matrix":
-            k_min, k_max = kc["Date"].min(), kc["Date"].max()
-            k_prev = kc["Date"].iloc[-2] if len(kc) > 1 else k_max  # previous trading day, not just latest-1
-            k_dates = kc["Date"].values
+        if ar_section == "Certs":
+            with st.container(key="rc_view_box"):
+                ar_view = st.radio("View", ["Table", "Visuals", "Seasonality"], horizontal=True,
+                                   label_visibility="collapsed", key="ar_certs_view")
+            st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
-            def on_or_before(target: pd.Timestamp) -> pd.Timestamp:
-                i = max(int(np.searchsorted(k_dates, np.datetime64(target), side="right")) - 1, 0)
-                return pd.Timestamp(k_dates[i])
+            if ar_view == "Table":
+                k_min, k_max = kc["Date"].min(), kc["Date"].max()
+                k_prev = kc["Date"].iloc[-2] if len(kc) > 1 else k_max  # previous trading day, not just latest-1
+                k_dates = kc["Date"].values
 
-            with st.container(key="ar_dates_box"):
-                span_pick = st.radio("Change over", ["Day", "Week", "Month", "Custom"], horizontal=True,
-                                     label_visibility="collapsed", key="ar_span")
-            if span_pick == "Day":
-                older_ts, latest_ts = k_prev, k_max
-            elif span_pick == "Week":
-                older_ts, latest_ts = on_or_before(k_max - pd.DateOffset(weeks=1)), k_max
-            elif span_pick == "Month":
-                older_ts, latest_ts = on_or_before(k_max - pd.DateOffset(months=1)), k_max
+                def on_or_before(target: pd.Timestamp) -> pd.Timestamp:
+                    i = max(int(np.searchsorted(k_dates, np.datetime64(target), side="right")) - 1, 0)
+                    return pd.Timestamp(k_dates[i])
+
+                with st.container(key="ar_dates_box"):
+                    span_pick = st.radio("Change over", ["Day", "Week", "Month", "Custom"], horizontal=True,
+                                         label_visibility="collapsed", key="ar_span")
+                if span_pick == "Day":
+                    older_ts, latest_ts = k_prev, k_max
+                elif span_pick == "Week":
+                    older_ts, latest_ts = on_or_before(k_max - pd.DateOffset(weeks=1)), k_max
+                elif span_pick == "Month":
+                    older_ts, latest_ts = on_or_before(k_max - pd.DateOffset(months=1)), k_max
+                else:
+                    with st.container(key="ar_dates_custom_box"):
+                        dc1, dc2, _ = st.columns([1, 1, 4])
+                        with dc1:
+                            st.markdown("<div class='sb-label' style='margin:0 0 2px'>Older Date</div>", unsafe_allow_html=True)
+                            older_pick = st.date_input("Older date", value=k_prev.date(),
+                                                       min_value=k_min.date(), max_value=k_max.date(),
+                                                       key="ar_older", label_visibility="collapsed")
+                        with dc2:
+                            st.markdown("<div class='sb-label' style='margin:0 0 2px'>Latest Date</div>", unsafe_allow_html=True)
+                            latest_pick = st.date_input("Latest date", value=k_max.date(),
+                                                        min_value=k_min.date(), max_value=k_max.date(),
+                                                        key="ar_latest", label_visibility="collapsed")
+                    older_ts, latest_ts = pd.Timestamp(older_pick), pd.Timestamp(latest_pick)
+                st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+                mx_row = st.container(key="ar_matrices_row")
+                mx_chg, mx_latest = mx_row.columns(2, gap="small")
+                with mx_chg:
+                    st.markdown(f"<div class='mt'>Certified Stocks Change ({older_ts.strftime('%d %b %Y')} "
+                               f"&rarr; {latest_ts.strftime('%d %b %Y')}, bags)</div>", unsafe_allow_html=True)
+                    st.markdown(kc_change_matrix_html(kc, older_ts, latest_ts), unsafe_allow_html=True)
+                with mx_latest:
+                    st.markdown(f"<div class='mt'>Latest Certified Stocks ({latest_ts.strftime('%d %b %Y')}, bags)</div>",
+                               unsafe_allow_html=True)
+                    st.markdown(kc_latest_matrix_html(kc, latest_ts), unsafe_allow_html=True)
             else:
-                with st.container(key="ar_dates_custom_box"):
-                    dc1, dc2, _ = st.columns([1, 1, 4])
-                    with dc1:
-                        st.markdown("<div class='sb-label' style='margin:0 0 2px'>Older Date</div>", unsafe_allow_html=True)
-                        older_pick = st.date_input("Older date", value=k_prev.date(),
-                                                   min_value=k_min.date(), max_value=k_max.date(),
-                                                   key="ar_older", label_visibility="collapsed")
-                    with dc2:
-                        st.markdown("<div class='sb-label' style='margin:0 0 2px'>Latest Date</div>", unsafe_allow_html=True)
-                        latest_pick = st.date_input("Latest date", value=k_max.date(),
-                                                    min_value=k_min.date(), max_value=k_max.date(),
-                                                    key="ar_latest", label_visibility="collapsed")
-                older_ts, latest_ts = pd.Timestamp(older_pick), pd.Timestamp(latest_pick)
-            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-            mx_row = st.container(key="ar_matrices_row")
-            mx_chg, mx_latest = mx_row.columns(2, gap="small")
-            with mx_chg:
-                st.markdown(f"<div class='mt'>Certified Stocks Change ({older_ts.strftime('%d %b %Y')} "
-                           f"&rarr; {latest_ts.strftime('%d %b %Y')}, bags)</div>", unsafe_allow_html=True)
-                st.markdown(kc_change_matrix_html(kc, older_ts, latest_ts), unsafe_allow_html=True)
-            with mx_latest:
-                st.markdown(f"<div class='mt'>Latest Certified Stocks ({latest_ts.strftime('%d %b %Y')}, bags)</div>",
-                           unsafe_allow_html=True)
-                st.markdown(kc_latest_matrix_html(kc, latest_ts), unsafe_allow_html=True)
-            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-            st.markdown("<div class='mt'>KC Grading Flow (bags)</div>", unsafe_allow_html=True)
-            st.markdown(kc_grading_flow_html(kc), unsafe_allow_html=True)
-        else:
+                st.markdown("<div class='card-desc'>Coming next.</div>", unsafe_allow_html=True)
+
+        elif ar_section == "Grading":
+            with st.container(key="rc_view_box"):
+                st.radio("View", ["Table", "Visuals", "Seasonality"], horizontal=True,
+                        label_visibility="collapsed", key="ar_grading_view")
+            st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
             st.markdown("<div class='card-desc'>Coming next.</div>", unsafe_allow_html=True)
+
+        else:
+            with st.container(key="rc_view_box"):
+                ar_cg_view = st.radio("View", ["Table", "Visuals", "Seasonality"], horizontal=True,
+                                      label_visibility="collapsed", key="ar_cg_view")
+            st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+
+            if ar_cg_view == "Table":
+                st.markdown("<div class='mt'>KC Grading Flow (bags)</div>", unsafe_allow_html=True)
+                st.markdown(kc_grading_flow_html(kc), unsafe_allow_html=True)
+            else:
+                st.markdown("<div class='card-desc'>Coming next.</div>", unsafe_allow_html=True)
 
     else:
         # A plain st.radio (not st.tabs) is used for these two levels of navigation: st.tabs
@@ -1351,11 +1373,11 @@ if commodity == "Coffee":
             end = certs["Date"].max()
             start = end - pd.DateOffset(years=HISTORY_YEARS)
             with st.container(key="rc_view_box"):
-                rc_view = st.radio("View", ["Data Table", "Visuals", "Seasonality & Distribution"], horizontal=True,
+                rc_view = st.radio("View", ["Table", "Visuals", "Seasonality"], horizontal=True,
                                    label_visibility="collapsed", key="rc_view")
             st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
-            if rc_view == "Data Table":
+            if rc_view == "Table":
                 st.markdown(certs_report_html(certs, start, end), unsafe_allow_html=True)
             elif rc_view == "Visuals":
                 c_min, c_max = certs["Date"].min(), certs["Date"].max()
@@ -1439,11 +1461,11 @@ if commodity == "Coffee":
         elif rc_section == "Grading":
             gr = load_rc_grading()
             with st.container(key="rc_view_box"):
-                rg_view = st.radio("View", ["Data Table", "Visuals", "Cumulative & Seasonals"], horizontal=True,
+                rg_view = st.radio("View", ["Table", "Visuals", "Seasonality"], horizontal=True,
                                    label_visibility="collapsed", key="rg_view")
             st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
-            if rg_view == "Data Table":
+            if rg_view == "Table":
                 st.markdown(grading_table_html(gr), unsafe_allow_html=True)
             elif rg_view == "Visuals":
                 gcfg = {"displayModeBar": False}
@@ -1523,11 +1545,11 @@ if commodity == "Coffee":
             certs = load_rc_certs()
             gr = load_rc_grading()
             with st.container(key="rc_view_box"):
-                rcg_view = st.radio("View", ["Data Table", "Visuals"], horizontal=True,
+                rcg_view = st.radio("View", ["Table", "Visuals", "Seasonality"], horizontal=True,
                                     label_visibility="collapsed", key="rcg_view")
             st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
-            if rcg_view == "Data Table":
+            if rcg_view == "Table":
                 st.markdown(monthly_grading_certs_html(gr, certs), unsafe_allow_html=True)
                 st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
                 _lag_l, _ = st.columns([1, 5])
@@ -1538,7 +1560,7 @@ if commodity == "Coffee":
                         lag_pick = st.radio("Certs lag", ["0d", "1d"], index=1, horizontal=True,
                                             label_visibility="collapsed", key="rcg_lag")
                 st.markdown(daily_grading_certs_html(gr, certs, lag=int(lag_pick[0])), unsafe_allow_html=True)
-            else:
+            elif rcg_view == "Visuals":
                 du = daily_usage_series(gr, certs)
                 u_min, u_max = du.index.min(), du.index.max()
                 g_first, g_last = gr["PanelDate"].min(), gr["PanelDate"].max()
@@ -1555,5 +1577,7 @@ if commodity == "Coffee":
                                     width="stretch", config=ucfg)
                 st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
                 st.plotly_chart(usage_by_origin_fig(gr, certs), width="stretch", config=ucfg)
+            else:
+                st.markdown("<div class='card-desc'>Coming next.</div>", unsafe_allow_html=True)
 else:
     st.markdown(f"<div class='card-desc'>{commodity}: not built yet.</div>", unsafe_allow_html=True)
