@@ -1959,55 +1959,91 @@ def kc_cg_monthly(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame) -> pd.Data
     return m
 
 
+def _chg_heat_td(v, mx):
+    """Signed change cell: green up, red down, one shared scale."""
+    if pd.isna(v) or v == 0:
+        return "<td></td>"
+    rgb = "31,157,111" if v > 0 else "201,74,74"
+    return f"<td style='background:rgba({rgb},{min(abs(v) / mx, 1.0) * 0.85:.2f})'>{int(round(v)):+,}</td>"
+
+
+def _cg_origin_split(p: pd.DataFrame, chg_o: pd.DataFrame, show_all: bool, top_n: int = 5):
+    """Origins with Passed bags, biggest first; Top-N + Other unless show_all. Returns the column labels
+    and matching Passed / certs-change frames (Other = sum of the rest)."""
+    origins = [o for o in p.columns if p[o].sum() > 0]
+    shown, minors = (origins, []) if show_all else (origins[:top_n], origins[top_n:])
+    pp = p[shown].copy()
+    cc = chg_o.reindex(columns=shown, fill_value=0).copy()
+    if minors:
+        pp["Other"] = p[minors].sum(axis=1)
+        cc["Other"] = chg_o.reindex(columns=minors, fill_value=0).sum(axis=1)
+    return list(pp.columns), pp, cc
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
-def kc_cg_monthly_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, height: str = "60vh") -> str:
+def kc_cg_monthly_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, show_all: bool = False,
+                       height: str = "60vh") -> str:
     days = pd.DatetimeIndex(days)
-    p = kc_gr_wide(g, pd.Series(days), "Passed")
     d = kc_cg_daily(g, pd.Series(days), kc)
-    p = p.reindex(d.index)
-    lots = p.groupby(p.index.to_period("M")).sum()
-    origins = [o for o in lots.columns if lots[o].sum() > 0]
+    p = kc_gr_wide(g, pd.Series(days), "Passed").reindex(d.index)
+    chg_o = kc_origin_certs(kc).diff().reindex(d.index)
+    cols, pp, cc = _cg_origin_split(p, chg_o, show_all)
+    per = d.index.to_period("M")
+    lots, chg_m = pp.groupby(per).sum(), cc.groupby(per).sum()
     m = kc_cg_monthly(g, pd.Series(days), kc)
-    mx, psc = max(float(lots[origins].max().max()), 1.0), max(float(m["Passed"].max()), 1.0)
+    mx, psc = max(float(lots.max().max()), 1.0), max(float(m["Passed"].max()), 1.0)
     csc, usc = max(float(m["Change"].abs().max()), 1.0), max(float(m["Usage"].abs().max()), 1.0)
     pcs = max(float(m["UsagePct"].abs().max()), 1.0)
+    cmx = max(float(chg_m.abs().max().max()), 1.0)
     out = ["<div class='mt' style='margin-bottom:4px'>Bags Passed by month and KC Certified Stocks (bags). Usage is Passed minus the "
            "change in certs, same day. Usage % is Usage over that month's average certs level.</div>",
            "<div class='rwrap' style='height:", height, "'><table class='rpt cmp'><thead><tr class='h1'>",
-           f"<th class='dt' rowspan='2'>Month</th><th colspan='{len(origins) + 1}'>Bags Passed by Origin</th>",
-           "<th colspan='4' class='sep certs-hdr'>KC Certs</th></tr><tr class='h2'>"]
-    out += [f"<th>{o}</th>" for o in origins]
+           f"<th class='dt' rowspan='2'>Month</th><th colspan='{len(cols) + 1}'>Bags Passed by Origin</th>",
+           "<th colspan='4' class='sep certs-hdr'>KC Certs</th>",
+           f"<th colspan='{len(cols)}' class='sep certs-hdr'>Certs Change by Origin</th></tr><tr class='h2'>"]
+    out += [f"<th>{o}</th>" for o in cols]
     out += ["<th>Total</th><th class='sep certs-hdr'>Level</th><th class='certs-hdr'>Change</th>",
-            "<th class='certs-hdr'>Usage</th><th class='certs-hdr'>Usage %</th></tr></thead><tbody>"]
+            "<th class='certs-hdr'>Usage</th><th class='certs-hdr'>Usage %</th>"]
+    out += [f"<th class='certs-hdr{' sep' if i == 0 else ''}'>{o}</th>" for i, o in enumerate(cols)] + ["</tr></thead><tbody>"]
     for pr in m.index[::-1]:
+        oc_cells = "".join(_chg_heat_td(chg_m.loc[pr, o], cmx).replace("<td", "<td class='sep'", 1) if i == 0
+                           else _chg_heat_td(chg_m.loc[pr, o], cmx) for i, o in enumerate(cols))
         out.append(f"<tr><td class='d'>{pr.strftime('%b %Y')}</td>"
-                   + "".join(_heat_td(lots.loc[pr, o], mx) for o in origins) + _bar_td(m.loc[pr, "Passed"], psc)
+                   + "".join(_heat_td(lots.loc[pr, o], mx) for o in cols) + _bar_td(m.loc[pr, "Passed"], psc)
                    + f"<td class='tot sep'>{_fmt_i(m.loc[pr, 'Level'])}</td>"
                    + _delta_td(m.loc[pr, "Change"], csc) + _delta_td(m.loc[pr, "Usage"], usc)
-                   + _delta_td(m.loc[pr, "UsagePct"], pcs, pct=True) + "</tr>")
+                   + _delta_td(m.loc[pr, "UsagePct"], pcs, pct=True) + oc_cells + "</tr>")
     return "".join(out) + "</tbody></table></div>"
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def kc_cg_daily_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, height: str = "60vh") -> str:
+def kc_cg_daily_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, show_all: bool = False,
+                     height: str = "60vh") -> str:
     days = pd.DatetimeIndex(days)
     p = kc_gr_wide(g, pd.Series(days), "Passed")
     d = kc_cg_daily(g, pd.Series(days), kc)
-    origins = [o for o in p.columns if p[o].sum() > 0]
-    mx, psc = max(float(p[origins].max().max()), 1.0), max(float(p.sum(axis=1).max()), 1.0)
+    chg_o = kc_origin_certs(kc).diff().reindex(days)
+    cols, pp, cc = _cg_origin_split(p, chg_o, show_all)
+    mx, psc = max(float(pp.max().max()), 1.0), max(float(pp.sum(axis=1).max()), 1.0)
     csc, usc = max(float(d["Change"].abs().max()), 1.0), max(float(d["Usage"].abs().max()), 1.0)
+    cmx = max(float(cc.abs().max().max()), 1.0)
     out = ["<div class='mt' style='margin-bottom:4px'>Bags Passed by day and KC Certified Stocks change (bags), same day</div>",
            "<div class='rwrap' style='height:", height, "'><table class='rpt cmp'><thead><tr class='h1'>",
-           f"<th class='dt' rowspan='2'>Date</th><th colspan='{len(origins) + 1}'>Bags Passed by Origin</th>",
-           "<th colspan='2' class='sep certs-hdr'>KC Certs</th></tr><tr class='h2'>"]
-    out += [f"<th>{o}</th>" for o in origins]
-    out += ["<th>Total</th><th class='sep certs-hdr'>Change</th><th class='certs-hdr'>Usage</th></tr></thead><tbody>"]
+           f"<th class='dt' rowspan='2'>Date</th><th colspan='{len(cols) + 1}'>Bags Passed by Origin</th>",
+           "<th colspan='2' class='sep certs-hdr'>KC Certs</th>",
+           f"<th colspan='{len(cols)}' class='sep certs-hdr'>Certs Change by Origin</th></tr><tr class='h2'>"]
+    out += [f"<th>{o}</th>" for o in cols]
+    out += ["<th>Total</th><th class='sep certs-hdr'>Change</th><th class='certs-hdr'>Usage</th>"]
+    out += [f"<th class='certs-hdr{' sep' if i == 0 else ''}'>{o}</th>" for i, o in enumerate(cols)] + ["</tr></thead><tbody>"]
     for dt in days[::-1]:
         has = dt in d.index
+        oc_cells = "".join(
+            (_chg_heat_td(cc.loc[dt, o], cmx) if has else "<td class='na'></td>").replace("<td", "<td class='sep'", 1) if i == 0
+            else (_chg_heat_td(cc.loc[dt, o], cmx) if has else "<td class='na'></td>") for i, o in enumerate(cols))
         out.append(f"<tr><td class='d'>{dt.strftime('%d-%b-%y')}</td>"
-                   + "".join(_heat_td(p.loc[dt, o], mx) for o in origins) + _bar_td(p.loc[dt].sum(), psc)
+                   + "".join(_heat_td(pp.loc[dt, o], mx) for o in cols) + _bar_td(pp.loc[dt].sum(), psc)
                    + (_delta_td(d.loc[dt, "Change"], csc, "cb sep") + _delta_td(d.loc[dt, "Usage"], usc)
-                      if has else "<td class='na sep'></td><td class='na'></td>") + "</tr>")
+                      if has else "<td class='na sep'></td><td class='na'></td>") + oc_cells + "</tr>")
     return "".join(out) + "</tbody></table></div>"
 
 
@@ -2395,9 +2431,11 @@ if commodity == "Coffee":
             ucfg = {"displayModeBar": False}
 
             if ar_cg_view == "Table":
-                st.markdown(kc_cg_monthly_html(g, gdays, kc), unsafe_allow_html=True)
+                t_all = st.radio("Origins", ["Top 5 + Other", "Show all origins"], horizontal=True,
+                                 label_visibility="collapsed", key="acg_tbl_origins") == "Show all origins"
+                st.markdown(kc_cg_monthly_html(g, gdays, kc, t_all), unsafe_allow_html=True)
                 st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-                st.markdown(kc_cg_daily_html(g, gdays, kc), unsafe_allow_html=True)
+                st.markdown(kc_cg_daily_html(g, gdays, kc, t_all), unsafe_allow_html=True)
                 st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
                 st.markdown("<div class='mt'>KC Grading Flow (bags)</div>", unsafe_allow_html=True)
                 st.markdown(kc_grading_flow_html(kc), unsafe_allow_html=True)
