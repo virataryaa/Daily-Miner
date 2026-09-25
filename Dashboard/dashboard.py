@@ -92,9 +92,6 @@ div[role="radiogroup"] label:has(input:checked) div[data-testid="stMarkdownConta
 .st-key-coffee_section_box div[role="radiogroup"] label { padding: 8px 34px !important; min-width: 90px; text-align: center; }
 .st-key-coffee_section_box div[role="radiogroup"] label p { font-size: 15px !important; }
 
-/* Arabica Matrix: the two side-by-side tables sit right next to each other */
-.st-key-ar_matrices_row [data-testid="stHorizontalBlock"] { gap: 0.5rem !important; }
-.st-key-ar_matrices_row { gap: 0.5rem !important; }
 .st-key-rc_view_box div[role="radiogroup"] label, .st-key-rg_view_box div[role="radiogroup"] label { padding: 4px 13px !important; }
 .st-key-rc_view_box div[role="radiogroup"] label p, .st-key-rg_view_box div[role="radiogroup"] label p { font-size: 13px !important; }
 .st-key-rcg_lag_box div[role="radiogroup"] { padding: 2px; }
@@ -1495,16 +1492,20 @@ if commodity == "Coffee":
                                                         key="ar_latest", label_visibility="collapsed")
                     older_ts, latest_ts = pd.Timestamp(older_pick), pd.Timestamp(latest_pick)
                 st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-                mx_row = st.container(key="ar_matrices_row")
-                mx_chg, mx_latest = mx_row.columns(2, gap="small")
-                with mx_chg:
-                    st.markdown(f"<div class='mt'>Certified Stocks Change ({older_ts.strftime('%d %b %Y')} "
-                               f"&rarr; {latest_ts.strftime('%d %b %Y')}, bags)</div>", unsafe_allow_html=True)
-                    st.markdown(kc_change_matrix_html(kc, older_ts, latest_ts), unsafe_allow_html=True)
-                with mx_latest:
-                    st.markdown(f"<div class='mt'>Latest Certified Stocks ({latest_ts.strftime('%d %b %Y')}, bags)</div>",
-                               unsafe_allow_html=True)
-                    st.markdown(kc_latest_matrix_html(kc, latest_ts), unsafe_allow_html=True)
+                # st.columns always splits the row into two EQUAL-width halves, but these tables
+                # are fit-content width - if one table is narrower than its half, the leftover
+                # space inside that column reads as a huge gap. A single flex wrapper sizes each
+                # side to its own content instead, so the two tables sit right next to each other.
+                st.markdown(
+                    "<div style='display:flex; gap:20px; align-items:flex-start; flex-wrap:wrap;'>"
+                    f"<div><div class='mt'>Certified Stocks Change ({older_ts.strftime('%d %b %Y')} "
+                    f"&rarr; {latest_ts.strftime('%d %b %Y')}, bags)</div>"
+                    f"{kc_change_matrix_html(kc, older_ts, latest_ts)}</div>"
+                    f"<div><div class='mt'>Latest Certified Stocks ({latest_ts.strftime('%d %b %Y')}, bags)</div>"
+                    f"{kc_latest_matrix_html(kc, latest_ts)}</div>"
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
 
             elif ar_view == "Visuals":
                 ac_min, ac_max = kc["Date"].min(), kc["Date"].max()
