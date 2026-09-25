@@ -2062,6 +2062,97 @@ def kc_cg_usage_origin(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame) -> pd
     return p - oc.diff().reindex(d.index)
 
 
+KC_PORT_CODE = {"Antwerp": "AN", "Barcelona": "BA", "Ham/Bre": "HA", "Houston": "HO", "Miami": "MI",
+                "New Orleans": "NO", "New York": "NY"}
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_port_certs(kc: pd.DataFrame) -> pd.DataFrame:
+    """Certs per port by name. LSEG has no Virginia RIC, so Virginia is the residual of the total. A day
+    whose port RICs do not add up to the total (a feed glitch) is dropped and the last good day carried."""
+    k = kc.set_index("Date")
+    tot = k["KC-TOT-TOT"].astype(float)
+    raw = pd.DataFrame({p: k[f"KC-TOT-{c}"].astype(float) for p, c in KC_PORT_CODE.items()})
+    ok = (tot - raw.sum(axis=1)).between(0, 10000)
+    out = raw.where(ok, np.nan).ffill(limit=5)
+    va = (tot - out.sum(axis=1)).clip(lower=0)
+    out["Virginia"] = va.where(va <= 10000, 0.0)
+    return out[KC_GR_PORTS]
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_cg_usage_port(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame) -> pd.DataFrame:
+    """Daily Usage per port (same day): the port's Passed minus the change in that port's own certs."""
+    d = kc_cg_daily(g, pd.Series(days), kc)
+    p = kc_gr_wide(g, pd.Series(days), "Passed", by="Port").reindex(d.index).reindex(columns=KC_GR_PORTS, fill_value=0).fillna(0)
+    return p - kc_port_certs(kc).diff().reindex(d.index).fillna(0)
+
+
+def _cg_port_head(first_col: str, cols: list) -> list:
+    """Three header rows: group (Passed | Certs Change | Usage), country band, port codes."""
+    groups = []
+    for c in cols:
+        ct = KC_GR_PORT_COUNTRY[c]
+        if groups and groups[-1][0] == ct:
+            groups[-1][1] += 1
+        else:
+            groups.append([ct, 1])
+    n = len(cols) + 1
+    edge = "border-left:2px solid #0a2463;"
+    h = ["<table class='rpt cmp'><thead><tr class='h1'>", f"<th class='dt' rowspan='3'>{first_col}</th>",
+         f"<th colspan='{n}'>Bags Passed by Port</th>",
+         f"<th colspan='{n}' class='certs-hdr' style='{edge}'>Certs Change by Port</th>",
+         f"<th colspan='{n}' class='certs-hdr' style='{edge}'>Usage by Port</th></tr><tr class='h2'>"]
+    for grp in range(3):
+        for i, (ct, k) in enumerate(groups):
+            e = edge if (grp and i == 0) else ("border-left:2px solid #ffffff;" if i else "")
+            h.append(f"<th colspan='{k}' style='background:{KC_COUNTRY_COLORS[ct]};{e}letter-spacing:.06em;"
+                     f"text-transform:uppercase'>{ct}</th>")
+        h.append(f"<th rowspan='2'{' class=certs-hdr' if grp else ''}>Total</th>")
+    h.append("</tr><tr class='h3'>")
+    for grp in range(3):
+        k = 0
+        for i, (ct, kk) in enumerate(groups):
+            for j in range(kk):
+                c = cols[k]
+                e = edge if (grp and k == 0) else ("border-left:2px solid #ffffff;" if j == 0 and i else "")
+                h.append(f"<th style='background:color-mix(in srgb, {KC_COUNTRY_COLORS[ct]} 58%, #0a2463);{e}'>"
+                         f"{KC_GR_PORT_SHORT[c]}</th>")
+                k += 1
+    h.append("</tr></thead><tbody>")
+    return h
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_cg_port_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, monthly: bool, height: str = "auto") -> str:
+    days = pd.DatetimeIndex(days)
+    d = kc_cg_daily(g, pd.Series(days), kc)
+    pas_all = kc_gr_wide(g, pd.Series(days), "Passed", by="Port").reindex(columns=KC_GR_PORTS, fill_value=0)
+    chg_all = kc_port_certs(kc).diff().reindex(days)
+    cols = [p for p in KC_GR_PORTS if pas_all[p].sum() > 0 or chg_all[p].abs().sum() > 0]
+    if monthly:
+        per = d.index.to_period("M")
+        pas = pas_all.reindex(d.index)[cols].groupby(per).sum()
+        chg = chg_all.reindex(d.index)[cols].fillna(0).groupby(per).sum()
+        rows = [(pr, pr.strftime("%b %Y"), True) for pr in pas.index[::-1]]
+        first, title = "Month", "Monthly"
+    else:
+        pas, chg = pas_all[cols], chg_all[cols].fillna(0)
+        rows = [(dt, dt.strftime("%d-%b-%y"), dt in d.index) for dt in days[::-1]]
+        first, title = "Date", "Daily"
+    use = pas - chg
+    okr = [r for r, _, h in rows if h]
+    sc = {"p": max(float(pas.max().max()), 1.0), "pt": max(float(pas.sum(axis=1).max()), 1.0),
+          "c": max(float(chg.loc[okr].abs().max().max()), 1.0), "ct": max(float(chg.loc[okr].sum(axis=1).abs().max()), 1.0),
+          "u": max(float(use.loc[okr].abs().max().max()), 1.0), "ut": max(float(use.loc[okr].sum(axis=1).abs().max()), 1.0)}
+    out = [f"<div class='mt' style='margin-bottom:4px'>{title} Grading, Certs Change and Usage by Port (bags)</div>",
+           f"<div class='rwrap' style='height:{height}'>"]
+    out += _cg_port_head(first, cols)
+    for key, label, has in rows:
+        out.append(_cg_row(label, pas.loc[key], chg.loc[key], use.loc[key], cols, sc, has))
+    return "".join(out) + "</tbody></table></div>"
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def kc_usage_by_origin_fig(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, show_all: bool,
                            top_n: int = 5, height: int = 380) -> go.Figure:
@@ -2107,7 +2198,7 @@ if commodity == "Coffee":
     if coffee_section == "Arabica":
         kc = load_kc_certs()
         with st.container(key="rc_section_box"):
-            ar_section = st.radio("Arabica section", ["Certs", "Grading", "Certs & Grading"], horizontal=True,
+            ar_section = st.radio("Arabica section", ["Certs", "Grading", "Usage"], horizontal=True,
                                   label_visibility="collapsed", key="ar_section")
         st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
@@ -2440,12 +2531,12 @@ if commodity == "Coffee":
         else:
             g, gdays = load_kc_grading()
             with st.container(key="rc_view_box"):
-                ar_cg_view = st.radio("View", ["Table", "Visuals", "Seasonality"], horizontal=True,
+                ar_cg_view = st.radio("View", ["Usage Per Origin", "Usage Per Port", "Cumulative"], horizontal=True,
                                       label_visibility="collapsed", key="ar_cg_view")
             st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
             ucfg = {"displayModeBar": False}
 
-            if ar_cg_view == "Table":
+            if ar_cg_view == "Usage Per Origin":
                 t_all = st.radio("Origins", ["Top 5 + Other", "Show all origins"], horizontal=True,
                                  label_visibility="collapsed", key="acg_tbl_origins") == "Show all origins"
                 st.markdown(kc_cg_monthly_html(g, gdays, kc, t_all), unsafe_allow_html=True)
@@ -2455,56 +2546,59 @@ if commodity == "Coffee":
                 st.markdown("<div class='mt'>KC Grading Flow (bags)</div>", unsafe_allow_html=True)
                 st.markdown(kc_grading_flow_html(kc), unsafe_allow_html=True)
 
-            elif ar_cg_view == "Visuals":
+            elif ar_cg_view == "Usage Per Port":
+                st.markdown(kc_cg_port_html(g, gdays, kc, True), unsafe_allow_html=True)
+                st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                st.markdown(kc_cg_port_html(g, gdays, kc, False, "72vh"), unsafe_allow_html=True)
+
+            else:
                 du = kc_cg_daily(g, gdays, kc)
-                ucm_col, uf_col, uo_col, _ = st.columns([1, 1.4, 2, 2])
+                uo = kc_cg_usage_origin(g, gdays, kc)
+                up = kc_cg_usage_port(g, gdays, kc)
+                ucm_col, _ = st.columns([1, 5])
                 with ucm_col:
                     st.markdown("<div class='sb-label' style='margin:0 0 2px'>Cumulative starts</div>", unsafe_allow_html=True)
                     ucm = MONTH_ABBR.index(st.selectbox("Cumulative starts", MONTH_ABBR, index=6,
                                                         label_visibility="collapsed", key="acg_crop_m")) + 1
-                with uo_col:
-                    st.markdown("<div class='sb-label' style='margin:0 0 2px'>Usage by origin</div>", unsafe_allow_html=True)
-                    u_all = st.radio("Usage origins", ["Top 5 + Other", "Show all origins"], horizontal=True,
-                                     label_visibility="collapsed", key="acg_origin_all")
-                uo = kc_cg_usage_origin(g, gdays, kc)
-                u_order = list(uo.sum().sort_values(ascending=False).index)
-                with uf_col:
-                    st.markdown("<div class='sb-label' style='margin:0 0 2px'>Fourth chart origin</div>", unsafe_allow_html=True)
-                    u_fourth = st.selectbox("Fourth chart", ["Total"] + u_order[3:], index=0,
+                last = gdays.max()
+
+                st.markdown("<div class='sec'>Per Origin</div>", unsafe_allow_html=True)
+                o_order = list(uo.sum().sort_values(ascending=False).index)
+                of_col, _ = st.columns([1.4, 5])
+                with of_col:
+                    o_fourth = st.selectbox("Fourth chart origin", ["Total"] + o_order[3:], index=0,
                                             label_visibility="collapsed", key="acg_fourth")
-                uq = st.columns(4)
-                for col_, o in zip(uq, u_order[:3] + [u_fourth]):
+                for col_, o in zip(st.columns(4), o_order[:3] + [o_fourth]):
                     with col_:
-                        ser = du["Usage"] if o == "Total" else uo[o]
-                        st.plotly_chart(kc_cum_lines_cached(ser, f"{o} | cumulative usage", ucm, gdays.max()),
+                        st.plotly_chart(kc_cum_lines_cached(du["Usage"] if o == "Total" else uo[o],
+                                                            f"{o} | cumulative usage", ucm, last),
                                         width="stretch", config=ucfg)
-                st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+
+                st.markdown("<div class='sec'>Per Port</div>", unsafe_allow_html=True)
+                p_order = list(up.sum().sort_values(ascending=False).index)
+                pf_col, _ = st.columns([1.4, 5])
+                with pf_col:
+                    p_fourth = st.selectbox("Fourth chart port", ["Total"] + p_order[3:], index=0,
+                                            label_visibility="collapsed", key="acg_fourth_port")
+                for col_, p_ in zip(st.columns(4), p_order[:3] + [p_fourth]):
+                    with col_:
+                        ttl = p_ if p_ == "Total" else f"{p_} ({KC_GR_PORT_COUNTRY[p_]})"
+                        st.plotly_chart(kc_cum_lines_cached(du["Usage"] if p_ == "Total" else up[p_],
+                                                            f"{ttl} | cumulative usage", ucm, last),
+                                        width="stretch", config=ucfg)
+
+                st.markdown("<div class='sec'>Per Country of Port</div>", unsafe_allow_html=True)
+                for col_, ct in zip(st.columns(4), ["Belgium", "Spain", "Germany", "USA"]):
+                    with col_:
+                        cs = up[[p_ for p_ in KC_GR_PORTS if KC_GR_PORT_COUNTRY[p_] == ct]].sum(axis=1)
+                        st.plotly_chart(kc_cum_lines_cached(cs, f"{ct} | cumulative usage", ucm, last),
+                                        width="stretch", config=ucfg)
+
+                st.markdown("<div class='sec'>Monthly Usage by Origin</div>", unsafe_allow_html=True)
+                u_all = st.radio("Usage origins", ["Top 5 + Other", "Show all origins"], horizontal=True,
+                                 label_visibility="collapsed", key="acg_origin_all")
                 st.plotly_chart(kc_usage_by_origin_fig(g, gdays, kc, u_all == "Show all origins"),
                                 width="stretch", config=ucfg)
-
-            else:
-                du = kc_cg_daily(g, gdays, kc)
-                mm = kc_cg_monthly(g, gdays, kc)
-                sm_col, _ = st.columns([1, 5])
-                with sm_col:
-                    st.markdown("<div class='sb-label' style='margin:0 0 2px'>Crop year starts</div>", unsafe_allow_html=True)
-                    scm2 = MONTH_ABBR.index(st.selectbox("Crop year starts", MONTH_ABBR, index=6,
-                                                         label_visibility="collapsed", key="acgs_crop_m")) + 1
-                st.markdown(
-                    "<div style='display:flex; gap:28px; align-items:flex-start; flex-wrap:wrap;'>"
-                    f"<div><div class='mt'>Monthly Usage (bags)</div>{kc_monthly_matrix_html(mm['Usage'], scm2, signed=True)}</div>"
-                    f"<div><div class='mt'>Monthly Usage % of average certs</div>{kc_monthly_matrix_html(mm['UsagePct'], scm2, pct=True)}</div>"
-                    "</div>", unsafe_allow_html=True)
-                st.markdown("<div style='height:36px'></div>", unsafe_allow_html=True)
-                _ul, ud, _ur = st.columns([1, 2, 1])
-                with ud:
-                    ud_span = st.radio("Usage distribution window", ["Last 1Y", "All"], index=1, horizontal=True,
-                                       label_visibility="collapsed", key="acgs_dist_span")
-                    us = du["Usage"]
-                    if ud_span == "Last 1Y":
-                        us = us[us.index >= us.index.max() - pd.DateOffset(years=1)]
-                    st.plotly_chart(distribution_fig(us, "Daily Usage Distribution", "chg"), width="stretch", config=ucfg)
-
     else:
         # A plain st.radio (not st.tabs) is used for these two levels of navigation: st.tabs
         # renders every tab's body on every rerun regardless of which one is showing, whereas a
