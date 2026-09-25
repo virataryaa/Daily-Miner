@@ -1296,11 +1296,11 @@ if commodity == "Coffee":
 
         if ar_section == "Certs":
             with st.container(key="rc_view_box"):
-                ar_view = st.radio("View", ["Table", "Visuals", "Seasonality"], horizontal=True,
+                ar_view = st.radio("View", ["Certs Change Matrix", "Visuals", "Seasonality"], horizontal=True,
                                    label_visibility="collapsed", key="ar_certs_view")
             st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
-            if ar_view == "Table":
+            if ar_view == "Certs Change Matrix":
                 k_min, k_max = kc["Date"].min(), kc["Date"].max()
                 k_prev = kc["Date"].iloc[-2] if len(kc) > 1 else k_max  # previous trading day, not just latest-1
                 k_dates = kc["Date"].values
