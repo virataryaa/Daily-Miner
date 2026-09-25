@@ -1832,43 +1832,29 @@ def kc_gr_pf_bars_fig(mf: pd.DataFrame, title: str, proportion: bool = False, he
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def kc_gr_port_html(g: pd.DataFrame, days: pd.Series, tag: str, start: pd.Timestamp, end: pd.Timestamp) -> str:
-    """Origin x port for one block, ports grouped by country (Europe left, USA right). Passed/Failed are
-    summed over the period; Pending is the stock at the period end."""
+def kc_gr_pending_donut_fig(g: pd.DataFrame, days: pd.Series, by: str, height: int = 360) -> go.Figure:
+    """Donut of the latest Pending stock split by Origin or by Port."""
     days = pd.DatetimeIndex(days)
-    src = g[g["Tag"] == tag]
-    if tag == "Pending":
-        src = src[src["Date"] == days[days <= end].max()]
+    last = days.max()
+    v = g[(g["Tag"] == "Pending") & (g["Date"] == last)].groupby(by)["Bags"].sum()
+    v = v[v > 0].sort_values(ascending=False)
+    if by == "Origin":
+        colors = kc_gr_colors(list(v.index))
+        labels = list(v.index)
     else:
-        src = src[(src["Date"] >= start) & (src["Date"] <= end)]
-    m = src.groupby(["Origin", "Port"])["Bags"].sum().unstack(fill_value=0).reindex(columns=KC_GR_PORTS, fill_value=0)
-    m = m[m.sum(axis=1) > 0]
-    m = m.loc[m.sum(axis=1).sort_values(ascending=False).index]
-    if m.empty:
-        return "<div class='rwrap' style='padding:14px'>No bags in this period.</div>"
-    rgb = {"Passed": "31,157,111", "Failed": "201,74,74", "Pending": "201,138,31"}[tag]
-    mx = max(float(m.max().max()), 1.0)
-    cols = [c for c in KC_GR_PORTS if m[c].sum() > 0]
-    groups = []
-    for c in cols:
-        ct = KC_GR_PORT_COUNTRY[c]
-        if groups and groups[-1][0] == ct:
-            groups[-1][1] += 1
-        else:
-            groups.append([ct, 1])
-    out = ["<div class='rwrap' style='height:auto'><table class='rpt static cmp'><thead><tr class='h1'>",
-           "<th class='dt' rowspan='2'>Origin</th>"]
-    out += [f"<th colspan='{n}' style='background:{KC_COUNTRY_COLORS[ct]};letter-spacing:.09em;text-transform:uppercase;"
-            f"border-left:2px solid #ffffff'>{ct}</th>" for ct, n in groups]
-    out += ["<th class='sep' rowspan='2'>Total</th></tr><tr class='h2'>"]
-    out += [f"<th style='background:color-mix(in srgb, {KC_COUNTRY_COLORS[KC_GR_PORT_COUNTRY[c]]} 58%, #0a2463)'>"
-            f"{KC_GR_PORT_SHORT[c]}</th>" for c in cols] + ["</tr></thead><tbody>"]
-    for o in m.index:
-        out.append(f"<tr><td class='d'>{o}</td>" + "".join(_heat_td(m.loc[o, c], mx, rgb) for c in cols)
-                   + f"<td class='tot sep'>{_fmt_i(m.loc[o].sum())}</td></tr>")
-    out.append("<tr class='tot'><td class='d'>Total</td>" + "".join(f"<td>{_fmt_i(m[c].sum())}</td>" for c in cols)
-               + f"<td class='sep'>{_fmt_i(m.values.sum())}</td></tr>")
-    return "".join(out) + "</tbody></table></div>"
+        colors = KC_GR_PORT_COLORS
+        labels = [KC_GR_PORT_SHORT.get(p, p) for p in v.index]
+    fig = go.Figure(go.Pie(
+        labels=labels, values=v.values, hole=0.62, sort=False, direction="clockwise",
+        marker=dict(colors=[colors.get(k, GREY) for k in v.index], line=dict(color="#fafafa", width=3)),
+        textinfo="label+percent", textposition="outside", textfont=dict(size=12, color="#1a1a2e"),
+        hovertemplate="%{label}: %{value:,.0f} (%{percent})<extra></extra>", showlegend=False))
+    chart_layout(fig, f"Pending by {by} ({last.strftime('%d %b %Y')})", height)
+    fig.update_layout(
+        margin=dict(t=44, b=24, l=50, r=50),
+        annotations=[dict(text=f"<b>{v.sum():,.0f}</b><br><span style='font-size:11px;color:#7a86a8'>bags pending</span>",
+                          x=0.5, y=0.5, showarrow=False, font=dict(size=22, color=NAVY))])
+    return fig
 
 
 KC_PORT_COUNTRY = {"AN": "Belgium", "BA": "Spain", "HA": "Germany", "HO": "USA", "MI": "USA", "NO": "USA", "NY": "USA"}
@@ -2332,11 +2318,11 @@ if commodity == "Coffee":
                             unsafe_allow_html=True)
 
             elif ar_g_view == "Pending":
-                p_last = g_max
-                st.markdown(f"<div class='mt'>Pending by Origin and Port (stock at {p_last.strftime('%d %b %Y')}, bags)</div>",
-                            unsafe_allow_html=True)
-                st.markdown(kc_gr_port_html(g, gdays, "Pending", g_min, g_max), unsafe_allow_html=True)
-                st.markdown("<div style='height:22px'></div>", unsafe_allow_html=True)
+                dn1, dn2 = st.columns(2)
+                with dn1:
+                    st.plotly_chart(kc_gr_pending_donut_fig(g, gdays, "Origin"), width="stretch", config=gcfg)
+                with dn2:
+                    st.plotly_chart(kc_gr_pending_donut_fig(g, gdays, "Port"), width="stretch", config=gcfg)
 
                 pv1, pv2, _ = st.columns([1.6, 1.8, 3])
                 with pv1:
