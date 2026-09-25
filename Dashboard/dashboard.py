@@ -2634,25 +2634,32 @@ def pl_scatter_fig(x: pd.Series, y: pd.Series, title: str, x_title: str, y_title
     return fig
 
 
-def pl_seasonal_fig(s: pd.Series, title: str, m: int, y_title: str, n_years: int = 5, height: int = 360) -> go.Figure:
-    """Monthly Series (PeriodIndex) by crop year: the latest n_years as lines plus the average."""
+def pl_seasonal_fig(s: pd.Series, title: str, y_title: str, n_years=5, height: int = 380) -> go.Figure:
+    """Monthly Series (PeriodIndex) by calendar year. The latest year (navy) and the year before (red) are lines; the
+    other years in the chosen window form the P10-P90 and P25-P75 bands and the dotted average."""
     per = s.index
-    cy = np.where(per.month >= m, per.year, per.year - 1)
-    tbl = pd.DataFrame({"v": s.values.astype(float), "cy": cy, "mo": per.month}).pivot_table(index="mo", columns="cy", values="v")
-    months = [(m - 1 + i) % 12 + 1 for i in range(12)]
-    tbl = tbl.reindex(months)
-    yrs = sorted(tbl.columns)[-n_years:]
-    xl = [MONTH_ABBR[mo - 1] for mo in months]
-    pal = ["#c5cbdd", "#9aa6c4", "#6b7fb5", RED, NAVY]
+    tbl = pd.DataFrame({"v": s.values.astype(float), "y": per.year, "mo": per.month}).pivot_table(index="mo", columns="y", values="v")
+    tbl = tbl.reindex(range(1, 13))
+    yrs = sorted(tbl.columns)
+    win = yrs[-n_years:] if n_years else yrs
+    cur = win[-1]
+    prev = win[-2] if len(win) > 1 else None
+    hist = tbl[[y for y in win if y != cur]]
+    xl = MONTH_ABBR
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=xl, y=tbl[yrs].mean(axis=1), mode="lines", name="Average", line=dict(color="#4a5578", width=1.5, dash="dot"),
-                             hovertemplate="%{y:,.1f}<extra>Average</extra>"))
-    for i, y in enumerate(yrs):
-        col = pal[-len(yrs):][i]
-        fig.add_trace(go.Scatter(x=xl, y=tbl[y], mode="lines+markers", name=crop_label(int(y), m), connectgaps=False,
-                                 line=dict(color=col, width=3 if col == NAVY else 2), marker=dict(size=4),
-                                 hovertemplate="%{y:,.1f}<extra>" + crop_label(int(y), m) + "</extra>"))
-    chart_layout(fig, title, height)
+    if hist.shape[1] >= 3:
+        for lo, hi, color, name in ((0.10, 0.90, "rgba(31,138,156,0.16)", "P10-P90"), (0.25, 0.75, "rgba(31,138,156,0.30)", "P25-P75")):
+            fig.add_trace(go.Scatter(x=xl, y=hist.quantile(hi, axis=1), mode="lines", line=dict(width=0), showlegend=False, hoverinfo="skip"))
+            fig.add_trace(go.Scatter(x=xl, y=hist.quantile(lo, axis=1), mode="lines", line=dict(width=0), fill="tonexty",
+                                     fillcolor=color, name=name, hoverinfo="skip"))
+        fig.add_trace(go.Scatter(x=xl, y=hist.mean(axis=1), mode="lines", name="Average", line=dict(color="#4a5578", width=1.5, dash="dot"),
+                                 hovertemplate="%{y:,.1f}<extra>Average</extra>"))
+    for y, col, w in ((prev, RED, 2), (cur, NAVY, 3)):
+        if y is not None:
+            fig.add_trace(go.Scatter(x=xl, y=tbl[y], mode="lines+markers", name=str(y), connectgaps=False, line=dict(color=col, width=w),
+                                     marker=dict(size=4), hovertemplate="%{y:,.1f}<extra>" + str(y) + "</extra>"))
+    rng = f"{win[0]}-{win[-1] - 1}" if len(win) > 1 else str(win[0])
+    chart_layout(fig, f"{title} | bands from {rng}", height)
     fig.update_layout(yaxis=dict(title=y_title, tickformat=","), legend=dict(font=dict(size=10)))
     return fig
 
@@ -2835,16 +2842,18 @@ def render_price_link(comm: str, pl: pd.DataFrame, series: dict, frame_fn) -> No
 
     else:   # Seasonal
         df = frame_fn("Monthly")
-        sm1, _ = st.columns([1, 5])
+        sm1, _ = st.columns([2.4, 4])
         with sm1:
-            st.markdown("<div class='sb-label' style='margin:0 0 2px'>Crop year starts</div>", unsafe_allow_html=True)
-            m = MONTH_ABBR.index(st.selectbox("Crop year starts", MONTH_ABBR, index=6, label_visibility="collapsed", key=f"pl{comm}_crop")) + 1
-        pl_section("Seasonal 1/2 spread", "Monthly average spread by crop year, latest five years, with their average.")
-        st.plotly_chart(pl_seasonal_fig(df["spread"], f"{cfg['name']} 1/2 spread by crop year", m, f"1/2 spread ({cfg['price_unit']})"),
+            st.markdown("<div class='sb-label' style='margin:0 0 2px'>Period for the bands</div>", unsafe_allow_html=True)
+            sper = st.radio("Period", ["5Y", "10Y", "15Y", "All"], index=0, horizontal=True, label_visibility="collapsed", key=f"pl{comm}_sper")
+        n = None if sper == "All" else int(sper[:-1])
+        pl_section("Seasonal 1/2 spread", "Monthly average spread by calendar year. Latest year in navy, previous year in red; the shaded bands "
+                   "are the P10-P90 and P25-P75 range of the earlier years in the period, the dotted line is their average.")
+        st.plotly_chart(pl_seasonal_fig(df["spread"], f"{cfg['name']} 1/2 spread", f"1/2 spread ({cfg['price_unit']})", n),
                         width="stretch", config=cfgc, key=f"pl{comm}_s1")
-        pl_section("Seasonal certified stocks", "End-of-month certified stocks by crop year, latest five years, with their average.")
+        pl_section("Seasonal certified stocks", "End-of-month certified stocks by calendar year, same bands.")
         stocks = df["stocks"] * (1000 if comm == "KC" else 1)
-        st.plotly_chart(pl_seasonal_fig(stocks, f"{cfg['name']} certified stocks by crop year", m, f"Certs ({cfg['stock_unit']})"),
+        st.plotly_chart(pl_seasonal_fig(stocks, f"{cfg['name']} certified stocks", f"Certs ({cfg['stock_unit']})", n),
                         width="stretch", config=cfgc, key=f"pl{comm}_s2")
 
 
