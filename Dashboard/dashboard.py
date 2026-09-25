@@ -1283,12 +1283,14 @@ if commodity == "Coffee":
                                             min_value=k_min.date(), max_value=k_max.date(),
                                             key="ar_latest", label_visibility="collapsed")
             older_ts, latest_ts = pd.Timestamp(older_pick), pd.Timestamp(latest_pick)
-            st.markdown("<div class='mt'>Certified Stocks Change (bags)</div>", unsafe_allow_html=True)
-            st.markdown(kc_change_matrix_html(kc, older_ts, latest_ts), unsafe_allow_html=True)
-            st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
-            st.markdown(f"<div class='mt'>Latest Certified Stocks ({latest_ts.strftime('%d %b %Y')}, bags)</div>",
-                       unsafe_allow_html=True)
-            st.markdown(kc_latest_matrix_html(kc, latest_ts), unsafe_allow_html=True)
+            mx_chg, mx_latest = st.columns(2)
+            with mx_chg:
+                st.markdown("<div class='mt'>Certified Stocks Change (bags)</div>", unsafe_allow_html=True)
+                st.markdown(kc_change_matrix_html(kc, older_ts, latest_ts), unsafe_allow_html=True)
+            with mx_latest:
+                st.markdown(f"<div class='mt'>Latest Certified Stocks ({latest_ts.strftime('%d %b %Y')}, bags)</div>",
+                           unsafe_allow_html=True)
+                st.markdown(kc_latest_matrix_html(kc, latest_ts), unsafe_allow_html=True)
             st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
             st.markdown("<div class='mt'>KC Grading Flow (bags)</div>", unsafe_allow_html=True)
             st.markdown(kc_grading_flow_html(kc), unsafe_allow_html=True)
