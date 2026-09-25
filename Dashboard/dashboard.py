@@ -174,6 +174,10 @@ span[data-baseweb="tag"] svg { fill: #ffffff !important; }
 .rpt.cmp td { padding: 1px 5px; }
 .rpt.cmp thead th { padding: 3px 5px; font-size: 9.5px; }
 .rpt.cmp td.cbl, .rpt.cmp td.cb { min-width: 46px; }
+.rpt.tiny { font-size: 9.5px; }
+.rpt.tiny td { padding: 1px 4px; min-width: 0; }
+.rpt.tiny thead th { padding: 3px 4px; font-size: 9px; letter-spacing: 0; }
+.rpt.tiny td.cbl, .rpt.tiny td.cb { min-width: 36px; }
 .rpt.big { font-size: 13.5px; }
 .rpt.big td { padding: 8px 14px; min-width: 62px; }
 .rpt.big thead th { padding: 8px 14px; font-size: 12.5px; top: 0 !important; }
@@ -1944,39 +1948,57 @@ def _chg_heat_td(v, mx):
     return f"<td style='background:rgba({rgb},{min(abs(v) / mx, 1.0) * 0.85:.2f})'>{int(round(v)):+,}</td>"
 
 
-def _cg_origin_split(p: pd.DataFrame, chg_o: pd.DataFrame, show_all: bool, top_n: int = 5):
+def _cg_origin_split(p: pd.DataFrame, chg_o: pd.DataFrame, show_all: bool, top_n: int = 5, f: pd.DataFrame = None):
     """Origins with Passed bags, biggest first; Top-N + Other unless show_all. Returns the column labels
-    and matching Passed / certs-change frames (Other = sum of the rest)."""
+    and matching Passed / certs-change / Failed frames (Other = sum of the rest)."""
     origins = [o for o in p.columns if p[o].sum() > 0]
     shown, minors = (origins, []) if show_all else (origins[:top_n], origins[top_n:])
     pp = p[shown].copy()
     cc = chg_o.reindex(columns=shown, fill_value=0).copy()
+    ff = (f if f is not None else p * 0).reindex(columns=shown, fill_value=0).copy()
     if minors:
         pp["Other"] = p[minors].sum(axis=1)
         cc["Other"] = chg_o.reindex(columns=minors, fill_value=0).sum(axis=1)
-    return list(pp.columns), pp, cc
+        ff["Other"] = (f if f is not None else p * 0).reindex(columns=minors, fill_value=0).sum(axis=1)
+    return list(pp.columns), pp, cc, ff
 
 
-def _cg_head(first_col: str, cols: list) -> list:
-    """Header for the Certs & Grading tables: Passed | Certs Change | Usage, each split by origin plus a Total."""
+def _cg_head(first_col: str, cols: list, with_rate: bool = False) -> list:
+    """Header for the Certs & Grading tables: Passed | (Pass %) | Certs Change | Usage, each split by origin plus a Total."""
     n = len(cols) + 1
-    h = ["<table class='rpt cmp'><thead><tr class='h1'>",
+    h = ["<table class='rpt cmp" + (" tiny" if with_rate else "") + "'><thead><tr class='h1'>",
          f"<th class='dt' rowspan='2'>{first_col}</th>",
-         f"<th colspan='{n}'>Bags Passed by Origin</th>",
-         f"<th colspan='{n}' class='sep certs-hdr'>Certs Change by Origin</th>",
-         f"<th colspan='{n}' class='sep certs-hdr'>Usage by Origin</th></tr><tr class='h2'>"]
-    for grp in range(3):
+         f"<th colspan='{n}'>Bags Passed by Origin</th>"]
+    if with_rate:
+        h.append(f"<th colspan='{n}' class='sep'>Pass % by Origin</th>")
+    h += [f"<th colspan='{n}' class='sep certs-hdr'>Certs Change by Origin</th>",
+          f"<th colspan='{n}' class='sep certs-hdr'>Usage by Origin</th></tr><tr class='h2'>"]
+    groups = 4 if with_rate else 3
+    for grp in range(groups):
+        certs = grp >= groups - 2
+        sep_first = grp >= 1
         for i, o in enumerate(cols + ["Total"]):
-            cls = ("certs-hdr" if grp else "") + (" sep" if (grp and i == 0) else "")
+            cls = ("certs-hdr" if certs else "") + (" sep" if (sep_first and i == 0) else "")
             h.append(f"<th class='{cls.strip()}'>{o}</th>" if cls.strip() else f"<th>{o}</th>")
     h.append("</tr></thead><tbody>")
     return h
 
 
-def _cg_row(label: str, pas: pd.Series, chg: pd.Series, use: pd.Series, cols: list, sc: dict, has: bool = True) -> str:
-    """One data row: Passed cells, Certs-change cells, Usage cells (origins then a Total each)."""
+def _rate_td(v, sep: bool = False) -> str:
+    cls = " class='sep'" if sep else ""
+    if pd.isna(v):
+        return f"<td{cls}></td>"
+    r, g_, b_ = _rate_rgb(float(v))
+    return f"<td{cls} style='background:rgb({r},{g_},{b_})'>{v:.0f}%</td>"
+
+
+def _cg_row(label: str, pas: pd.Series, chg: pd.Series, use: pd.Series, cols: list, sc: dict, has: bool = True,
+            rate: pd.Series = None) -> str:
+    """One data row: Passed cells, (Pass % cells), Certs-change cells, Usage cells (origins then a Total each)."""
     r = [f"<tr><td class='d'>{label}</td>"]
     r += [_heat_td(pas[o], sc["p"]) for o in cols] + [_bar_td(pas.sum(), sc["pt"])]
+    if rate is not None:
+        r += [_rate_td(rate[o], i == 0) for i, o in enumerate(cols)] + [_rate_td(rate["Total"])]
     if has:
         for k, ser, tsc in (("c", chg, sc["ct"]), ("u", use, sc["ut"])):
             cells = [_chg_heat_td(ser[o], sc[k]) for o in cols]
@@ -1987,46 +2009,60 @@ def _cg_row(label: str, pas: pd.Series, chg: pd.Series, use: pd.Series, cols: li
     return "".join(r) + "</tr>"
 
 
+def _rate_frame(pp: pd.DataFrame, ff: pd.DataFrame, f_all_total: pd.Series) -> pd.DataFrame:
+    """Pass % per shown column and in total (total uses every failed bag, including origins with no Passed)."""
+    den = (pp + ff).replace(0, np.nan)
+    r = pp / den * 100
+    tp = pp.sum(axis=1)
+    r["Total"] = tp / (tp + f_all_total).replace(0, np.nan) * 100
+    return r
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def kc_cg_monthly_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, show_all: bool = False,
-                       height: str = "auto") -> str:
+                       height: str = "auto", with_rate: bool = False) -> str:
     days = pd.DatetimeIndex(days)
     d = kc_cg_daily(g, pd.Series(days), kc)
     p = kc_gr_wide(g, pd.Series(days), "Passed").reindex(d.index)
+    f_full = kc_gr_wide(g, pd.Series(days), "Failed").reindex(d.index)
     chg_o = kc_origin_certs(kc).diff().reindex(d.index)
-    cols, pp, cc = _cg_origin_split(p, chg_o, show_all)
+    cols, pp, cc, ff = _cg_origin_split(p, chg_o, show_all, f=f_full)
     per = d.index.to_period("M")
-    lots, chg_m = pp.groupby(per).sum(), cc.groupby(per).sum()
+    lots, chg_m, ffm = pp.groupby(per).sum(), cc.groupby(per).sum(), ff.groupby(per).sum()
+    rate = _rate_frame(lots, ffm, f_full.sum(axis=1).groupby(per).sum()) if with_rate else None
     use_m = lots - chg_m
     sc = {"p": max(float(lots.max().max()), 1.0), "pt": max(float(lots.sum(axis=1).max()), 1.0),
           "c": max(float(chg_m.abs().max().max()), 1.0), "ct": max(float(chg_m.sum(axis=1).abs().max()), 1.0),
           "u": max(float(use_m.abs().max().max()), 1.0), "ut": max(float(use_m.sum(axis=1).abs().max()), 1.0)}
     out = ["<div class='mt' style='margin-bottom:4px'>Monthly Grading, Certs Change and Usage by Origin (bags)</div>",
            f"<div class='rwrap' style='height:{height}'>"]
-    out += _cg_head("Month", cols)
+    out += _cg_head("Month", cols, with_rate)
     for pr in lots.index[::-1]:
-        out.append(_cg_row(pr.strftime("%b %Y"), lots.loc[pr], chg_m.loc[pr], use_m.loc[pr], cols, sc))
+        out.append(_cg_row(pr.strftime("%b %Y"), lots.loc[pr], chg_m.loc[pr], use_m.loc[pr], cols, sc, True, rate.loc[pr] if with_rate else None))
     return "".join(out) + "</tbody></table></div>"
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def kc_cg_daily_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, show_all: bool = False,
-                     height: str = "72vh") -> str:
+                     height: str = "72vh", with_rate: bool = False) -> str:
     days = pd.DatetimeIndex(days)
     p = kc_gr_wide(g, pd.Series(days), "Passed")
+    f_full = kc_gr_wide(g, pd.Series(days), "Failed")
     d = kc_cg_daily(g, pd.Series(days), kc)
     chg_o = kc_origin_certs(kc).diff().reindex(days)
-    cols, pp, cc = _cg_origin_split(p, chg_o, show_all)
+    cols, pp, cc, ff = _cg_origin_split(p, chg_o, show_all, f=f_full)
     use = pp - cc
+    rate = _rate_frame(pp, ff, f_full.sum(axis=1)) if with_rate else None
     ok = cc.loc[cc.index.isin(d.index)]
     sc = {"p": max(float(pp.max().max()), 1.0), "pt": max(float(pp.sum(axis=1).max()), 1.0),
           "c": max(float(ok.abs().max().max()), 1.0), "ct": max(float(ok.sum(axis=1).abs().max()), 1.0),
           "u": max(float(use.loc[ok.index].abs().max().max()), 1.0), "ut": max(float(use.loc[ok.index].sum(axis=1).abs().max()), 1.0)}
     out = ["<div class='mt' style='margin-bottom:4px'>Daily Grading, Certs Change and Usage by Origin (bags)</div>",
            f"<div class='rwrap' style='height:{height}'>"]
-    out += _cg_head("Date", cols)
+    out += _cg_head("Date", cols, with_rate)
     for dt in days[::-1]:
-        out.append(_cg_row(dt.strftime("%d-%b-%y"), pp.loc[dt], cc.loc[dt].fillna(0), use.loc[dt].fillna(0), cols, sc, dt in d.index))
+        out.append(_cg_row(dt.strftime("%d-%b-%y"), pp.loc[dt], cc.loc[dt].fillna(0), use.loc[dt].fillna(0), cols, sc,
+                           dt in d.index, rate.loc[dt] if with_rate else None))
     return "".join(out) + "</tbody></table></div>"
 
 
@@ -2175,7 +2211,7 @@ if commodity == "Coffee":
     if coffee_section == "Arabica":
         kc = load_kc_certs()
         with st.container(key="rc_section_box"):
-            ar_section = st.radio("Arabica section", ["Certs", "Grading", "Usage"], horizontal=True,
+            ar_section = st.radio("Arabica section", ["Certs", "Grading", "Usage", "Comprehensive View"], horizontal=True,
                                   label_visibility="collapsed", key="ar_section")
         st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
@@ -2498,7 +2534,7 @@ if commodity == "Coffee":
                 st.markdown(f"<div class='mt'>Pass Rate Per Origin | {lbl}</div>", unsafe_allow_html=True)
                 st.markdown(kc_passrate_matrix_html(mf["Passed"], mf["Failed"], 1), unsafe_allow_html=True)
 
-        else:
+        elif ar_section == "Usage":
             g, gdays = load_kc_grading()
             with st.container(key="rc_view_box"):
                 ar_cg_view = st.radio("View", ["Usage Per Origin", "Usage Per Port", "Cumulative"], horizontal=True,
@@ -2569,6 +2605,14 @@ if commodity == "Coffee":
                                  label_visibility="collapsed", key="acg_origin_all")
                 st.plotly_chart(kc_usage_by_origin_fig(g, gdays, kc, u_all == "Show all origins"),
                                 width="stretch", config=ucfg)
+
+        else:
+            g, gdays = load_kc_grading()
+            cv_all = st.radio("Origins", ["Top 5 + Other", "Show all origins"], horizontal=True,
+                              label_visibility="collapsed", key="acv_origins") == "Show all origins"
+            st.markdown(kc_cg_monthly_html(g, gdays, kc, cv_all, "auto", True), unsafe_allow_html=True)
+            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            st.markdown(kc_cg_daily_html(g, gdays, kc, cv_all, "72vh", True), unsafe_allow_html=True)
     else:
         # A plain st.radio (not st.tabs) is used for these two levels of navigation: st.tabs
         # renders every tab's body on every rerun regardless of which one is showing, whereas a
