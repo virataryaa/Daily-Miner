@@ -73,6 +73,13 @@ div[role="radiogroup"] label div[data-testid="stMarkdownContainer"] p { font-siz
 div[role="radiogroup"] label:has(input:checked) { background: #0a2463 !important; }
 div[role="radiogroup"] label:has(input:checked) div[data-testid="stMarkdownContainer"] p { color: #ffffff !important; font-weight: 600; }
 
+/* Section / View pill radios: these replace st.tabs so only the picked branch runs each rerun
+   (a real st.tabs renders every tab's body on every rerun; this radio does not). */
+.st-key-rc_section_box div[role="radiogroup"] label { padding: 6px 16px !important; }
+.st-key-rc_section_box div[role="radiogroup"] label p { font-size: 14px !important; }
+.st-key-rc_view_box div[role="radiogroup"] label, .st-key-rg_view_box div[role="radiogroup"] label { padding: 4px 13px !important; }
+.st-key-rc_view_box div[role="radiogroup"] label p, .st-key-rg_view_box div[role="radiogroup"] label p { font-size: 13px !important; }
+
 .stDataFrame { background: #ffffff; }
 
 /* Sidebar title (hero text) */
@@ -171,6 +178,7 @@ COUNTRY_PORTS = {
 }
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def countries_by_stock(df: pd.DataFrame, grade: str = "VG") -> list:
     """[(country, [ports])] with the biggest country first today, and the
     biggest port first inside each country."""
@@ -184,6 +192,7 @@ def countries_by_stock(df: pd.DataFrame, grade: str = "VG") -> list:
     return sorted(out, key=lambda cp: -sum(stock(p) for p in cp[1]))
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def certs_report_html(df: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp,
                       grade: str = "VG", height: str = "60vh") -> str:
     """One table, dates down the rows. Columns are grouped Country > Port.
@@ -263,6 +272,7 @@ def chart_layout(fig, title, height=360):
     return fig
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def total_certs_fig(df: pd.DataFrame, grade: str = "VG") -> go.Figure:
     s = df[["Date", f"LRC-TOT-{grade}"]].dropna()
     fig = go.Figure(go.Scatter(
@@ -272,6 +282,7 @@ def total_certs_fig(df: pd.DataFrame, grade: str = "VG") -> go.Figure:
     return chart_layout(fig, "Total Certs")
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def major_ports(view: pd.DataFrame, grade: str = "VG", min_share: float = 0.01) -> list:
     """Ports whose average share of the total in `view` is at least min_share,
     biggest first. Near-zero ports are left out of the charts."""
@@ -283,6 +294,7 @@ def major_ports(view: pd.DataFrame, grade: str = "VG", min_share: float = 0.01) 
             if pd.notna(share[p]) and share[p] >= min_share]
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def ports_certs_fig(df: pd.DataFrame, grade: str = "VG") -> go.Figure:
     """Stacked area of certs per major port (biggest at the bottom); minor ports pooled into Other.
     2012-14 has total-only rows (all ports blank), which would collapse the stack, so only rows
@@ -305,6 +317,7 @@ def ports_certs_fig(df: pd.DataFrame, grade: str = "VG") -> go.Figure:
     return chart_layout(fig, "Certs Per Port")
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def rolling_fig(series: pd.Series, n: int, start: pd.Timestamp, end: pd.Timestamp, title: str) -> go.Figure:
     """Rolling n-observation change of a stock series (computed on the full
     history, then cut to the chosen window)."""
@@ -319,6 +332,7 @@ def rolling_fig(series: pd.Series, n: int, start: pd.Timestamp, end: pd.Timestam
     return fig
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def rolling_ports_fig(df: pd.DataFrame, ports: list, n: int, start: pd.Timestamp, end: pd.Timestamp,
                       grade: str = "VG") -> go.Figure:
     """Rolling n-observation change, one line per chosen port."""
@@ -336,6 +350,7 @@ def rolling_ports_fig(df: pd.DataFrame, ports: list, n: int, start: pd.Timestamp
     return fig
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def share_line_fig(df: pd.DataFrame, grade: str = "VG") -> go.Figure:
     """Each major port's share of total certs (%) over time, as lines."""
     tot = df[f"LRC-TOT-{grade}"].astype(float).where(lambda v: v > 0)
@@ -351,6 +366,7 @@ def share_line_fig(df: pd.DataFrame, grade: str = "VG") -> go.Figure:
     return fig
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def country_share_line_fig(df: pd.DataFrame, grade: str = "VG", min_share: float = 0.01) -> go.Figure:
     """Each country's share of total certs (%) over time; countries under min_share on average are left out."""
     tot = df[f"LRC-TOT-{grade}"].astype(float).where(lambda v: v > 0)
@@ -378,6 +394,7 @@ def tint(hex_color: str, keep: float = 0.55) -> str:
     return f"#{mix(r):02x}{mix(g):02x}{mix(b):02x}"
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def share_pie_fig(df: pd.DataFrame, grade: str = "VG") -> go.Figure:
     """Latest breakup as a two-ring donut: inner ring = country, outer ring = port.
     Ports under 1% of the total are pooled into a grey Other."""
@@ -419,6 +436,7 @@ def share_pie_fig(df: pd.DataFrame, grade: str = "VG") -> go.Figure:
     return fig
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def seasonality_fig(df: pd.DataFrame, col: str, title: str) -> go.Figure:
     """Day-of-year seasonality: history bands (min-max, 10-90, 25-75 pct), average,
     last year in red and the current year in navy (same styling as Cotton On-Call)."""
@@ -428,9 +446,9 @@ def seasonality_fig(df: pd.DataFrame, col: str, title: str) -> go.Figure:
     w = w[w["x"] <= 365]
     cur = int(w["yr"].max())
     hist = w[w["yr"] < cur]
-    band = hist.groupby("x")["v"].agg(
-        lo="min", p10=lambda v: v.quantile(0.10), p25=lambda v: v.quantile(0.25),
-        avg="mean", p75=lambda v: v.quantile(0.75), p90=lambda v: v.quantile(0.90), hi="max").sort_index()
+    band = hist.groupby("x")["v"].agg(lo="min", avg="mean", hi="max").sort_index()
+    q = hist.groupby("x")["v"].quantile([0.10, 0.25, 0.75, 0.90]).unstack()
+    band[["p10", "p25", "p75", "p90"]] = q[[0.10, 0.25, 0.75, 0.90]].values
 
     fig = go.Figure()
     for lo, hi, color, name in [("lo", "hi", "rgba(31,138,156,0.08)", "Min-Max"),
@@ -452,6 +470,7 @@ def seasonality_fig(df: pd.DataFrame, col: str, title: str) -> go.Figure:
     return fig
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def seasonality_options(df: pd.DataFrame, grade: str = "VG") -> dict:
     """Label -> column. Total first, then ports with the most stock today first."""
     last = df.iloc[-1]
@@ -460,6 +479,7 @@ def seasonality_options(df: pd.DataFrame, grade: str = "VG") -> dict:
     return {"Total": f"LRC-TOT-{grade}", **{p: f"LRC-{p}-{grade}" for p in ports}}
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def monthly_change_html(df: pd.DataFrame, col: str) -> str:
     """Year x month matrix of month-end-to-month-end change, with in-cell bars
     and a YEAR total column."""
@@ -502,6 +522,7 @@ def monthly_change_html(df: pd.DataFrame, col: str) -> str:
 DIST_START = "2015-01-01"  # daily-observation era; earlier data is roughly biweekly
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def distribution_fig(values: pd.Series, title: str, label: str) -> go.Figure:
     """Histogram of non-zero daily changes (zero-change days are counted but not drawn, they only
     make one giant spike) over the 1st-99th percentile, with a fitted normal curve and the latest
@@ -568,6 +589,7 @@ def load_rc_grading() -> pd.DataFrame:
     return g
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def grading_origin_palette(g: pd.DataFrame) -> tuple:
     """(origins biggest-first, colours). The top three keep the strong app colours; every smaller
     origin gets a lighter tint that fades with rank."""
@@ -583,6 +605,7 @@ def grading_origin_palette(g: pd.DataFrame) -> tuple:
     return order, colors
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def grading_table_html(g: pd.DataFrame, height: str = "60vh") -> str:
     """Panel dates down the rows. Left: total lots (data bars) then Origin > Class.
     Right: Country > Port. Empty columns are left out."""
@@ -641,6 +664,7 @@ def grading_table_html(g: pd.DataFrame, height: str = "60vh") -> str:
     return "".join(head) + "".join(body) + "</tbody></table></div>"
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def grading_bar_fig(view: pd.DataFrame, col: str, title: str, order: list, colors: dict,
                     labels: dict | None = None, height: int = 340) -> go.Figure:
     """Lots graded per panel date, stacked by `col` (category axis: only panel dates are shown)."""
@@ -681,6 +705,7 @@ def crop_label(yr: int, m: int) -> str:
     return str(yr) if m == 1 else f"{yr % 100:02d}/{(yr + 1) % 100:02d}"
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def crop_seasonality_fig(g_sel: pd.DataFrame, title: str, m: int, first: pd.Timestamp, last: pd.Timestamp,
                          height: int = 360) -> go.Figure:
     """Cumulative lots graded through the crop year (resets on the 1st of month m), history bands from
@@ -703,9 +728,9 @@ def crop_seasonality_fig(g_sel: pd.DataFrame, title: str, m: int, first: pd.Time
     cur = int(w["yr"].max())
     hist = w[w["yr"] < cur]
     if not hist.empty:
-        band = hist.groupby("x")["v"].agg(
-            lo="min", p10=lambda v: v.quantile(0.10), p25=lambda v: v.quantile(0.25), avg="mean",
-            p75=lambda v: v.quantile(0.75), p90=lambda v: v.quantile(0.90), hi="max").sort_index()
+        band = hist.groupby("x")["v"].agg(lo="min", avg="mean", hi="max").sort_index()
+        q = hist.groupby("x")["v"].quantile([0.10, 0.25, 0.75, 0.90]).unstack()
+        band[["p10", "p25", "p75", "p90"]] = q[[0.10, 0.25, 0.75, 0.90]].values
         for lo, hi, color in [("lo", "hi", "rgba(31,138,156,0.08)"), ("p10", "p90", "rgba(31,138,156,0.16)"),
                               ("p25", "p75", "rgba(31,138,156,0.28)")]:
             fig.add_trace(go.Scatter(x=band.index, y=band[hi], line=dict(width=0), showlegend=False, hoverinfo="skip"))
@@ -729,6 +754,7 @@ def crop_seasonality_fig(g_sel: pd.DataFrame, title: str, m: int, first: pd.Time
     return fig
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def monthly_lots_html(g: pd.DataFrame, m: int = 1) -> str:
     """Crop year x month lots graded (columns start at month m) with in-cell bars and a crop-year total."""
     s = g.groupby("PanelDate")["NoLots"].sum()
@@ -775,15 +801,28 @@ with st.sidebar:
 if commodity == "Coffee":
     tab_arabica, tab_robusta = st.tabs(["Arabica", "Robusta"])
     with tab_robusta:
-        sub_certs, sub_grading, sub_both = st.tabs(["Certs", "Grading", "Certs & Grading"])
-        with sub_certs:
+        # A plain st.radio (not st.tabs) is used for these two levels of navigation: st.tabs
+        # renders every tab's body on every rerun regardless of which one is showing, whereas a
+        # radio only ever runs the branch that's picked. That is what made switching between
+        # Certs/Grading views, or the sub-views inside them, feel slow - every click anywhere on
+        # the page was silently rebuilding every table and chart in every tab, every time.
+        with st.container(key="rc_section_box"):
+            rc_section = st.radio("Section", ["Certs", "Grading", "Certs & Grading"], horizontal=True,
+                                  label_visibility="collapsed", key="rc_section")
+        st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+
+        if rc_section == "Certs":
             certs = load_rc_certs()
             end = certs["Date"].max()
             start = end - pd.DateOffset(years=HISTORY_YEARS)
-            tab_data, tab_visuals, tab_season = st.tabs(["Data Table", "Visuals", "Seasonality & Distribution"])
-            with tab_data:
+            with st.container(key="rc_view_box"):
+                rc_view = st.radio("View", ["Data Table", "Visuals", "Seasonality & Distribution"], horizontal=True,
+                                   label_visibility="collapsed", key="rc_view")
+            st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+
+            if rc_view == "Data Table":
                 st.markdown(certs_report_html(certs, start, end), unsafe_allow_html=True)
-            with tab_visuals:
+            elif rc_view == "Visuals":
                 c_min, c_max = certs["Date"].min(), certs["Date"].max()
                 span = st.radio("History", ["1Y", "3Y", "5Y", "All", "Custom"], index=2, horizontal=True,
                                 label_visibility="collapsed", key="rc_chart_span")
@@ -836,7 +875,7 @@ if commodity == "Coffee":
                 with mo2:
                     st.plotly_chart(rolling_ports_fig(certs, roll_ports, roll_n, c_start, c_end),
                                     width="stretch", config=cfg)
-            with tab_season:
+            else:
                 opts = seasonality_options(certs)
                 s_left, s_right = st.columns([2, 3])
                 with s_left:
@@ -862,13 +901,16 @@ if commodity == "Coffee":
                     st.plotly_chart(distribution_fig(chg, f"Daily Change Distribution: {view_pick}", "chg"),
                                     width="stretch", config={"displayModeBar": False})
 
-        with sub_grading:
+        elif rc_section == "Grading":
             gr = load_rc_grading()
-            g_data, g_vis, g_season = st.tabs(["Data Table", "Visuals", "Seasonality & Distribution"])
-            with g_data:
-                st.markdown(grading_table_html(gr), unsafe_allow_html=True)
+            with st.container(key="rc_view_box"):
+                rg_view = st.radio("View", ["Data Table", "Visuals", "Seasonality & Distribution"], horizontal=True,
+                                   label_visibility="collapsed", key="rg_view")
+            st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
-            with g_vis:
+            if rg_view == "Data Table":
+                st.markdown(grading_table_html(gr), unsafe_allow_html=True)
+            elif rg_view == "Visuals":
                 gcfg = {"displayModeBar": False}
                 g_min, g_max = gr["PanelDate"].min(), gr["PanelDate"].max()
                 g_span = st.radio("Grading history", ["3M", "6M", "1Y", "All", "Custom"], index=1, horizontal=True,
@@ -897,7 +939,7 @@ if commodity == "Coffee":
                 st.plotly_chart(grading_bar_fig(gview, "PortId", "Daily Gradings in Lots | Per Port",
                                                 port_order, PORT_COLORS), width="stretch", config=gcfg)
 
-            with g_season:
+            else:
                 gcfg2 = {"displayModeBar": False}
                 origin_rank = list(gr.groupby("OriginName")["NoLots"].sum().sort_values(ascending=False).index)
                 top3, rest = origin_rank[:3], origin_rank[3:]
@@ -939,3 +981,8 @@ if commodity == "Coffee":
                         per_panel = per_panel[per_panel.index >= per_panel.index.max() - pd.DateOffset(years=1)]
                     st.plotly_chart(distribution_fig(per_panel, "Lots Graded per Panel: Total", "lvl"),
                                     width="stretch", config=gcfg2)
+
+        else:
+            st.markdown("<div class='card-desc'>Coming next.</div>", unsafe_allow_html=True)
+else:
+    st.markdown(f"<div class='card-desc'>{commodity}: not built yet.</div>", unsafe_allow_html=True)
