@@ -2222,7 +2222,7 @@ if commodity == "Coffee":
             g, gdays = load_kc_grading()
             g_min, g_max = gdays.min(), gdays.max()
             with st.container(key="rc_view_box"):
-                ar_g_view = st.radio("View", ["Table", "Visuals", "Seasonality", "Pending", "Pass Rate"], horizontal=True,
+                ar_g_view = st.radio("View", ["Table", "Visuals", "Cumulative", "Pending", "Pass Rate"], horizontal=True,
                                      label_visibility="collapsed", key="ar_grading_view")
             st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
             gcfg = {"displayModeBar": False}
@@ -2281,7 +2281,7 @@ if commodity == "Coffee":
                     st.plotly_chart(kc_cum_lines_cached(f_w.sum(axis=1), "Cumulative Bags Failed", vcm, g_max),
                                     width="stretch", config=gcfg)
 
-            elif ar_g_view == "Seasonality":
+            elif ar_g_view == "Cumulative":
                 sc0, sc1, sc2, _ = st.columns([1, 1, 1.4, 3])
                 with sc0:
                     st.markdown("<div class='sb-label' style='margin:0 0 2px'>Measure</div>", unsafe_allow_html=True)
