@@ -127,8 +127,8 @@ span[data-baseweb="tag"] svg { fill: #ffffff !important; }
 .rpt.kcmx th, .rpt.kcmx td { padding: 3px 6px; }
 
 /* Compact date pickers for the Older/Latest Date row */
-.st-key-ar_dates_box input { padding: 4px 8px !important; font-size: 12px !important; height: auto !important; }
-.st-key-ar_dates_box [data-baseweb="base-input"], .st-key-ar_dates_box [data-baseweb="input"] { min-height: 0 !important; }
+.st-key-ar_dates_custom_box input { padding: 4px 8px !important; font-size: 12px !important; height: auto !important; }
+.st-key-ar_dates_custom_box [data-baseweb="base-input"], .st-key-ar_dates_custom_box [data-baseweb="input"] { min-height: 0 !important; }
 
 .rpt thead th.certs-hdr { background: #9c6a17 !important; }
 .rpt td.gs { border-left: 1px solid #dfe3ee; }
@@ -1279,19 +1279,36 @@ if commodity == "Coffee":
         if ar_view == "Matrix":
             k_min, k_max = kc["Date"].min(), kc["Date"].max()
             k_prev = kc["Date"].iloc[-2] if len(kc) > 1 else k_max  # previous trading day, not just latest-1
+            k_dates = kc["Date"].values
+
+            def on_or_before(target: pd.Timestamp) -> pd.Timestamp:
+                i = max(int(np.searchsorted(k_dates, np.datetime64(target), side="right")) - 1, 0)
+                return pd.Timestamp(k_dates[i])
+
             with st.container(key="ar_dates_box"):
-                dc1, dc2, _ = st.columns([1, 1, 4])
-                with dc1:
-                    st.markdown("<div class='sb-label' style='margin:0 0 2px'>Older Date</div>", unsafe_allow_html=True)
-                    older_pick = st.date_input("Older date", value=k_prev.date(),
-                                               min_value=k_min.date(), max_value=k_max.date(),
-                                               key="ar_older", label_visibility="collapsed")
-                with dc2:
-                    st.markdown("<div class='sb-label' style='margin:0 0 2px'>Latest Date</div>", unsafe_allow_html=True)
-                    latest_pick = st.date_input("Latest date", value=k_max.date(),
-                                                min_value=k_min.date(), max_value=k_max.date(),
-                                                key="ar_latest", label_visibility="collapsed")
-            older_ts, latest_ts = pd.Timestamp(older_pick), pd.Timestamp(latest_pick)
+                span_pick = st.radio("Change over", ["Day", "Week", "Month", "Custom"], horizontal=True,
+                                     label_visibility="collapsed", key="ar_span")
+            if span_pick == "Day":
+                older_ts, latest_ts = k_prev, k_max
+            elif span_pick == "Week":
+                older_ts, latest_ts = on_or_before(k_max - pd.DateOffset(weeks=1)), k_max
+            elif span_pick == "Month":
+                older_ts, latest_ts = on_or_before(k_max - pd.DateOffset(months=1)), k_max
+            else:
+                with st.container(key="ar_dates_custom_box"):
+                    dc1, dc2, _ = st.columns([1, 1, 4])
+                    with dc1:
+                        st.markdown("<div class='sb-label' style='margin:0 0 2px'>Older Date</div>", unsafe_allow_html=True)
+                        older_pick = st.date_input("Older date", value=k_prev.date(),
+                                                   min_value=k_min.date(), max_value=k_max.date(),
+                                                   key="ar_older", label_visibility="collapsed")
+                    with dc2:
+                        st.markdown("<div class='sb-label' style='margin:0 0 2px'>Latest Date</div>", unsafe_allow_html=True)
+                        latest_pick = st.date_input("Latest date", value=k_max.date(),
+                                                    min_value=k_min.date(), max_value=k_max.date(),
+                                                    key="ar_latest", label_visibility="collapsed")
+                older_ts, latest_ts = pd.Timestamp(older_pick), pd.Timestamp(latest_pick)
+            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
             mx_chg, mx_latest = st.columns(2)
             with mx_chg:
                 st.markdown("<div class='mt'>Certified Stocks Change (bags)</div>", unsafe_allow_html=True)
