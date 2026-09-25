@@ -94,6 +94,9 @@ div[role="radiogroup"] label:has(input:checked) div[data-testid="stMarkdownConta
 
 .st-key-rc_view_box div[role="radiogroup"] label, .st-key-rg_view_box div[role="radiogroup"] label { padding: 4px 13px !important; }
 .st-key-rc_view_box div[role="radiogroup"] label p, .st-key-rg_view_box div[role="radiogroup"] label p { font-size: 13px !important; }
+.st-key-cmb_unit_box { display: flex; justify-content: flex-end; }
+.st-key-cmb_unit_box div[role="radiogroup"] label { padding: 4px 13px !important; }
+.st-key-cmb_unit_box div[role="radiogroup"] label p { font-size: 13px !important; }
 .st-key-rcg_lag_box div[role="radiogroup"] { padding: 2px; }
 .st-key-rcg_lag_box div[role="radiogroup"] label { padding: 1px 8px !important; }
 .st-key-rcg_lag_box div[role="radiogroup"] label p { font-size: 10px !important; }
@@ -2799,138 +2802,203 @@ def to_unit(kind: str, s, unit: str):
     return s * BAG_MT if kind == "KC" else s * LOT_MT
 
 
-def _lines_fig(cols: dict, title: str, y_title: str, height: int = 400) -> go.Figure:
+CMB_PORT = {"ANT": "Antwerp", "BAR": "Barcelona", "HAM": "Ham/Bre", "BRE": "Ham/Bre", "LON": "London", "FEL": "Felixstowe",
+            "LIV": "Liverpool", "AMS": "Amsterdam", "ROT": "Rotterdam", "GEN": "Genoa", "TRI": "Trieste", "LEH": "Le Havre",
+            "NOR": "Virginia"}      # Robusta port codes on the Arabica port names (Ham + Bre together, Norfolk = Virginia)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def cmb_certs_frame(kc_certs: pd.Series, rc_certs: pd.Series) -> pd.DataFrame:
+    """Daily certs on Arabica's trading days: A = Arabica bags, R = Robusta lots (carried over gaps of up to 5 days)."""
+    df = pd.concat([kc_certs.rename("A"), rc_certs.rename("R")], axis=1)
+    df["R"] = df["R"].ffill(limit=5)
+    return df.dropna(subset=["A", "R"])
+
+
+def cmb_certs_table_html(df: pd.DataFrame, unit: str, nrows: int = 0, height: str = "72vh") -> str:
+    a, r = to_unit("KC", df["A"], unit), to_unit("RC", df["R"], unit)
+    t = a + r
+    da, dr, dt = a.diff(), r.diff(), t.diff()
+    idx = df.index[::-1]
+    if nrows:
+        idx = idx[:nrows]
+    tsc = max(float(t.max()), 1.0)
+    csc = max(float(pd.concat([da, dr]).abs().max()), 1.0)
+    tcs = max(float(dt.abs().max()), 1.0)
+    out = [f"<div class='mt' style='margin-bottom:4px'>Certified stocks and daily change, Arabica and Robusta ({unit})</div>",
+           f"<div class='rwrap' style='height:{height}'><table class='rpt cmp'><thead><tr class='h1'><th class='dt' rowspan='2'>Date</th>",
+           "<th colspan='3'>Certified stocks</th><th colspan='3' class='sep certs-hdr'>Change on the day</th></tr><tr class='h2'>",
+           "<th>Arabica</th><th>Robusta</th><th>Total</th><th class='sep certs-hdr'>Arabica</th><th class='certs-hdr'>Robusta</th>"
+           "<th class='certs-hdr'>Total</th></tr></thead><tbody>"]
+    for d in idx:
+        out.append(f"<tr><td class='d'>{d.strftime('%d-%b-%y')}</td><td>{_fmt_i(a[d])}</td><td>{_fmt_i(r[d])}</td>{_bar_td(t[d], tsc)}"
+                   + _delta_td(da[d], csc, "cb sep") + _delta_td(dr[d], csc) + _delta_td(dt[d], tcs) + "</tr>")
+    return "".join(out) + "</tbody></table></div>"
+
+
+def cmb_certs_bar_fig(df: pd.DataFrame, unit: str, height: int = 420) -> go.Figure:
+    a, r = to_unit("KC", df["A"], unit), to_unit("RC", df["R"], unit)
     fig = go.Figure()
-    styles = {"Arabica": dict(color=NAVY, width=1.8), "Robusta": dict(color=AMBER, width=1.8), "Combined": dict(color=RED, width=2.6)}
-    for name, s in cols.items():
-        fig.add_trace(go.Scatter(x=s.index, y=s.values, mode="lines", name=name, line=styles.get(name, dict(width=1.6)),
+    for name, ser, col in (("Arabica", a, NAVY), ("Robusta", r, AMBER)):
+        fig.add_trace(go.Bar(x=ser.index, y=ser.values, name=name, marker=dict(color=col, line=dict(width=0)),
+                             hovertemplate="%{y:,.0f}<extra>" + name + "</extra>"))
+    chart_layout(fig, f"Certified stocks: Arabica and Robusta ({unit})", height)
+    fig.update_layout(barmode="stack", bargap=0, hovermode="x unified", yaxis=dict(title=unit, tickformat=","),
+                      legend=dict(orientation="h", y=1.02, x=1, xanchor="right", yanchor="bottom"), margin=dict(t=56, b=8, l=8, r=8))
+    return fig
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def cmb_monthly_blocks(g: pd.DataFrame, gdays: pd.Series, gr: pd.DataFrame) -> tuple:
+    """Monthly graded by origin: Arabica Passed bags and Robusta lots (raw units, PeriodIndex)."""
+    kp = kc_gr_wide(g, pd.Series(gdays), "Passed")
+    ka = kp.groupby(kp.index.to_period("M")).sum()
+    rr = gr.groupby(["PanelDate", "OriginName"])["NoLots"].sum().unstack(fill_value=0)
+    rm = rr.groupby(rr.index.to_period("M")).sum()
+    return ka, rm
+
+
+def cmb_grading_table_html(ka: pd.DataFrame, rm: pd.DataFrame, unit: str, show_all: bool, top_n: int = 6) -> str:
+    A, R = to_unit("KC", ka, unit), to_unit("RC", rm, unit)
+
+    def block(df):
+        order = list(df.sum().sort_values(ascending=False).index)
+        shown = order if show_all else order[:top_n]
+        out = df[shown].copy()
+        if not show_all and len(order) > top_n:
+            out["Other"] = df[order[top_n:]].sum(axis=1)
+        return out
+
+    ab, rb = block(A), block(R)
+    months = sorted(set(A.index) | set(R.index), reverse=True)
+    ab, rb = ab.reindex(months), rb.reindex(months)          # months before a coffee's data starts stay blank
+    at_, rt = ab.sum(axis=1, min_count=1), rb.sum(axis=1, min_count=1)
+    comb = at_.fillna(0) + rt.fillna(0)
+    sa, sr = max(float(ab.max().max()), 1.0), max(float(rb.max().max()), 1.0)
+    sta, str_, stc = max(float(at_.max()), 1.0), max(float(rt.max()), 1.0), max(float(comb.max()), 1.0)
+    na, nr = len(ab.columns) + 1, len(rb.columns) + 1
+    out = [f"<div class='mt' style='margin-bottom:4px'>Graded per month by origin, Arabica and Robusta side by side ({unit})</div>",
+           "<div class='rwrap' style='height:auto'><table class='rpt cmp'><thead><tr class='h1'><th class='dt' rowspan='2'>Month</th>",
+           f"<th colspan='{na}'>Arabica graded by origin</th><th colspan='{nr}' class='sep certs-hdr'>Robusta graded by origin</th>",
+           "<th class='sep'>Both</th></tr><tr class='h2'>"]
+    out += [f"<th>{o}</th>" for o in ab.columns] + ["<th>Total</th>"]
+    out += [f"<th class='certs-hdr{' sep' if i == 0 else ''}'>{o}</th>" for i, o in enumerate(list(rb.columns) + ["Total"])]
+    out += ["<th class='sep'>Total</th></tr></thead><tbody>"]
+    for m in months:
+        row = [f"<tr><td class='d'>{m.strftime('%b %Y')}</td>"]
+        row += [_heat_td(ab.loc[m, o], sa) for o in ab.columns] + [_bar_td(at_[m], sta) if pd.notna(at_[m]) else "<td class='na'></td>"]
+        cells = [_heat_td(rb.loc[m, o], sr) for o in rb.columns]
+        cells[0] = cells[0].replace("<td", "<td class='sep'", 1)
+        row += cells + [_bar_td(rt[m], str_) if pd.notna(rt[m]) else "<td class='na'></td>"]
+        row.append(_bar_td(comb[m], stc).replace("<td", "<td class='sep'", 1) if comb[m] else "<td class='na sep'></td>")
+        out.append("".join(row) + "</tr>")
+    return "".join(out) + "</tbody></table></div>"
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def cmb_grading_daily(g: pd.DataFrame, gdays: pd.Series, gr: pd.DataFrame, origin: str, port: str) -> tuple:
+    """Daily graded for one origin and port (or all), Arabica bags and Robusta lots (raw units)."""
+    sub = g[g["Tag"] == "Passed"]
+    if origin != "All origins":
+        sub = sub[sub["Origin"] == origin]
+    if port != "All ports":
+        sub = sub[sub["Port"] == port]
+    a = sub.groupby("Date")["Bags"].sum().reindex(pd.DatetimeIndex(gdays), fill_value=0)
+    rr = gr.assign(PortName=gr["PortId"].map(CMB_PORT).fillna(gr["PortId"]))
+    if origin != "All origins":
+        rr = rr[rr["OriginName"] == origin]
+    if port != "All ports":
+        rr = rr[rr["PortName"] == port]
+    r = rr.groupby("PanelDate")["NoLots"].sum().reindex(pd.bdate_range(gr["PanelDate"].min(), gr["PanelDate"].max()), fill_value=0)
+    return a, r
+
+
+def cmb_bar_fig(s: pd.Series, title: str, color: str, unit: str) -> go.Figure:
+    m = s.groupby(s.index.to_period("M")).sum()
+    fig = go.Figure(go.Bar(x=[p.strftime("%b %y") for p in m.index], y=m.values, marker_color=color,
+                           hovertemplate="%{x}: %{y:,.0f}<extra></extra>"))
+    chart_layout(fig, title, 360)
+    fig.update_layout(showlegend=False, bargap=0.25, xaxis=dict(type="category", tickangle=-90, tickfont=dict(size=9)),
+                      yaxis=dict(title=unit, tickformat=","))
+    return fig
+
+
+def cmb_rolling_fig(s: pd.Series, title: str, unit: str, start) -> go.Figure:
+    lines = (("1 day", s, "#b8c0d6", 1.0), ("1 week (5d)", s.rolling(5, min_periods=1).sum(), TEAL, 1.8),
+             ("1 month (21d)", s.rolling(21, min_periods=1).sum(), NAVY, 2.4))
+    fig = go.Figure()
+    for name, ser, col, w in lines:
+        ser = ser if start is None else ser[ser.index >= start]
+        fig.add_trace(go.Scatter(x=ser.index, y=ser.values, mode="lines", name=name, line=dict(color=col, width=w),
                                  hovertemplate="%{y:,.0f}<extra>" + name + "</extra>"))
-    chart_layout(fig, title, height)
-    fig.update_layout(yaxis=dict(title=y_title, tickformat=",", zeroline=True, zerolinecolor="#9aa3b8"),
-                      legend=dict(orientation="h", y=1.02, x=1, xanchor="right", yanchor="bottom"), margin=dict(t=64, b=8, l=8, r=8))
+    chart_layout(fig, title, 360)
+    fig.update_layout(yaxis=dict(title=unit, tickformat=","), legend=dict(orientation="h", y=1.02, x=1, xanchor="right", yanchor="bottom"),
+                      margin=dict(t=56, b=8, l=8, r=8))
     return fig
 
 
 def render_combined(kc: pd.DataFrame, g: pd.DataFrame, gdays: pd.Series, gr: pd.DataFrame, rc_certs: pd.DataFrame) -> None:
-    ku, ru = pl_series_kc(kc, g, gdays), pl_series_rc(gr, rc_certs)
     cfgc = {"displayModeBar": False}
-    u1, u2, _ = st.columns([1.2, 2.2, 3])
-    with u1:
-        st.markdown("<div class='sb-label' style='margin:0 0 2px'>Unit</div>", unsafe_allow_html=True)
-        unit = st.radio("Unit", ["Bags", "MT"], horizontal=True, label_visibility="collapsed", key="cmb_unit")
-    with u2:
-        st.markdown("<div class='card-desc' style='margin-top:20px'>Arabica in 60 kg bags, Robusta in 10 MT lots. "
-                    f"Everything below is shown in {unit}.</div>", unsafe_allow_html=True)
-    with st.container(key="rc_view_box"):
-        view = st.radio("View", ["Combined Total", "Per Origin"], horizontal=True, label_visibility="collapsed", key="cmb_view")
+    top_l, top_r = st.columns([6, 1.6])
+    with top_l:
+        with st.container(key="rc_view_box"):
+            view = st.radio("View", ["Data Table", "Grading", "Origin & Port"], horizontal=True, label_visibility="collapsed", key="cmb_view")
+    with top_r:
+        with st.container(key="cmb_unit_box"):
+            unit = st.radio("Unit", ["Bags", "MT"], horizontal=True, label_visibility="collapsed", key="cmb_unit")
     st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
-    if view == "Combined Total":
-        m1, m2, _ = st.columns([2, 2, 3])
-        with m1:
-            st.markdown("<div class='sb-label' style='margin:0 0 2px'>Series</div>", unsafe_allow_html=True)
-            metric = st.selectbox("Series", ["Certified stocks", "Graded (monthly)", "Usage (monthly)"], label_visibility="collapsed", key="cmb_metric")
-        with m2:
-            span = pl_span_radio("cmb_span")
-        if metric == "Certified stocks":
-            k, r = to_unit("KC", ku["certs"], unit), to_unit("RC", ru["certs"], unit)
-            df = pd.concat([k.rename("Arabica"), r.rename("Robusta")], axis=1).ffill().dropna()
-            ttl = "Certified stocks"
-        else:
-            if metric.startswith("Graded"):
-                ks = kc_gr_wide(g, gdays, "Passed").sum(axis=1)
-                rs = gr.groupby("PanelDate")["NoLots"].sum()
-                ttl = "Graded, monthly total"
-            else:
-                ks, rs = ku["usage"].dropna(), ru["usage"].dropna()
-                ttl = "Usage, monthly total"
-            k = _mstamp(to_unit("KC", ks.groupby(ks.index.to_period("M")).sum(), unit))
-            r = _mstamp(to_unit("RC", rs.groupby(rs.index.to_period("M")).sum(), unit))
-            df = pd.concat([k.rename("Arabica"), r.rename("Robusta")], axis=1).dropna()
-        df["Combined"] = df["Arabica"] + df["Robusta"]
-        df = _since(df, pl_start(span, df.index.max()))
-        pl_section(ttl, f"Arabica, Robusta and their sum, in {unit}.")
-        st.plotly_chart(_lines_fig({c: df[c] for c in ["Arabica", "Robusta", "Combined"]}, f"{ttl} ({unit})", unit),
-                        width="stretch", config=cfgc, key="cmb_lines")
+    if view == "Data Table":
+        df = cmb_certs_frame(kc.set_index("Date")["KC-TOT-TOT"].astype(float).dropna(),
+                             rc_certs.set_index("Date")["LRC-TOT-VG"].dropna().astype(float))
+        c1, c2, _ = st.columns([1.8, 1.8, 3])
+        with c1:
+            n_rows = rows_radio("cmb_rows")
+        with c2:
+            span = pl_span_radio("cmb_span", "3Y")
+        st.markdown(cmb_certs_table_html(df, unit, n_rows), unsafe_allow_html=True)
+        st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
+        st.plotly_chart(cmb_certs_bar_fig(_since(df, pl_start(span, df.index.max())), unit), width="stretch", config=cfgc, key="cmb_bar")
+
+    elif view == "Grading":
+        ka, rm = cmb_monthly_blocks(g, gdays, gr)
+        o1, _ = st.columns([2.2, 4])
+        with o1:
+            st.markdown("<div class='sb-label' style='margin:0 0 2px'>Origins shown</div>", unsafe_allow_html=True)
+            show_all = st.radio("Origins", ["Top 6 + Other", "Show all origins"], horizontal=True, label_visibility="collapsed",
+                                key="cmb_gr_all") == "Show all origins"
+        st.markdown(cmb_grading_table_html(ka, rm, unit, show_all), unsafe_allow_html=True)
 
     else:
-        m1, m2, _ = st.columns([1.6, 2, 3])
-        with m1:
-            st.markdown("<div class='sb-label' style='margin:0 0 2px'>Study</div>", unsafe_allow_html=True)
-            what = st.radio("Study", ["Grading", "Certs"], horizontal=True, label_visibility="collapsed", key="cmb_what")
-        if what == "Grading":
-            with m2:
-                st.markdown("<div class='sb-label' style='margin:0 0 2px'>Period for the origin split</div>", unsafe_allow_html=True)
-                per = st.radio("Period", ["3M", "6M", "1Y", "All"], index=2, horizontal=True, label_visibility="collapsed", key="cmb_period")
-            kp = kc_gr_wide(g, gdays, "Passed")                       # daily Arabica Passed bags by origin
-            rr = gr.assign(O=gr["OriginName"]).groupby(["PanelDate", "O"])["NoLots"].sum().unstack(fill_value=0)   # daily Robusta lots
-            last = max(kp.index.max(), rr.index.max())
-            start = None if per == "All" else last - pd.DateOffset(months={"3M": 3, "6M": 6, "1Y": 12}[per])
-            kpp, rrp = _since(kp, start), _since(rr, start)
-            ka = to_unit("KC", kpp.sum(), unit)
-            ra = to_unit("RC", rrp.sum(), unit)
-            tab = pd.concat([ka.rename("Arabica"), ra.rename("Robusta")], axis=1).fillna(0)
-            tab["Total"] = tab["Arabica"] + tab["Robusta"]
-            tab = tab[tab["Total"] > 0].sort_values("Total", ascending=False)
-            pl_section("Graded by origin, Arabica and Robusta together", f"Total graded in the period, in {unit}. Origins that grow both "
-                       "coffees appear in both bars.")
-            top = tab.head(14).iloc[::-1]
-            fig = go.Figure()
-            for c, col in (("Arabica", NAVY), ("Robusta", AMBER)):
-                fig.add_trace(go.Bar(y=top.index, x=top[c], name=c, orientation="h", marker_color=col,
-                                     hovertemplate="%{x:,.0f}<extra>" + c + "</extra>"))
-            chart_layout(fig, f"Graded by origin ({unit}), {per}", 460)
-            fig.update_layout(barmode="stack", xaxis=dict(title=unit, tickformat=","), yaxis=dict(automargin=True),
-                              legend=dict(orientation="h", y=1.08, x=0, xanchor="left", yanchor="bottom"), margin=dict(t=60, b=8, l=8, r=8))
-            st.plotly_chart(fig, width="stretch", config=cfgc, key="cmb_bar")
-            out = ["<div class='rwrap' style='height:auto'><table class='rpt cmp'><thead><tr class='h2'><th class='dt'>Origin</th>"
-                   f"<th>Arabica</th><th>Robusta</th><th>Total</th><th>Share</th></tr></thead><tbody>"]
-            tot_all = float(tab["Total"].sum())
-            for o, r in tab.iterrows():
-                out.append(f"<tr><td class='d'>{o}</td><td>{'' if r['Arabica'] == 0 else _fmt_i(r['Arabica'])}</td>"
-                           f"<td>{'' if r['Robusta'] == 0 else _fmt_i(r['Robusta'])}</td><td class='tot'>{_fmt_i(r['Total'])}</td>"
-                           f"<td>{r['Total'] / tot_all * 100:.1f}%</td></tr>")
-            out.append(f"<tr class='tot'><td class='d'>Total</td><td>{_fmt_i(tab['Arabica'].sum())}</td><td>{_fmt_i(tab['Robusta'].sum())}</td>"
-                       f"<td>{_fmt_i(tot_all)}</td><td>100%</td></tr></tbody></table></div>")
-            st.markdown("".join(out), unsafe_allow_html=True)
-            st.markdown("<div style='height:22px'></div>", unsafe_allow_html=True)
-            span = pl_span_radio("cmb_span2")
-            pl_section("Monthly graded by origin", f"Top six origins of each coffee, monthly totals in {unit}.")
-            left, right = st.columns(2)
-            for col_, title, frame, kind, key in ((left, "Arabica", kp, "KC", "cmb_ma"), (right, "Robusta", rr, "RC", "cmb_mr")):
-                mm = frame.groupby(frame.index.to_period("M")).sum()
-                mm = _mstamp(to_unit(kind, mm, unit))
-                mm = _since(mm, pl_start(span, mm.index.max()))
-                order = list(mm.sum().sort_values(ascending=False).index[:6])
-                with col_:
-                    lf = go.Figure()
-                    for o in order:
-                        lf.add_trace(go.Scatter(x=mm.index, y=mm[o], mode="lines", name=o, hovertemplate="%{y:,.0f}<extra>" + o + "</extra>"))
-                    chart_layout(lf, f"{title}: graded by origin ({unit})", 380)
-                    lf.update_layout(yaxis=dict(title=unit, tickformat=","), legend=dict(orientation="h", y=-0.15, x=0, xanchor="left", yanchor="top"))
-                    st.plotly_chart(lf, width="stretch", config=cfgc, key=key)
-        else:
-            with m2:
-                span = pl_span_radio("cmb_span3")
-            oc = to_unit("KC", kc_origin_certs(kc), unit)
-            oc = _since(oc, pl_start(span, oc.index.max()))
-            order = list(oc.iloc[-1].sort_values(ascending=False).index[:8])
-            pl_section("Arabica certified stocks by origin", f"Top eight origins by current certified stocks, in {unit}. Robusta certified "
-                       "stocks are reported by port only, so there is no origin split for Robusta.")
-            lf = go.Figure()
-            for o in order:
-                lf.add_trace(go.Scatter(x=oc.index, y=oc[o], mode="lines", name=o, hovertemplate="%{y:,.0f}<extra>" + o + "</extra>"))
-            chart_layout(lf, f"Arabica certified stocks by origin ({unit})", 420)
-            lf.update_layout(yaxis=dict(title=unit, tickformat=","), legend=dict(orientation="h", y=-0.12, x=0, xanchor="left", yanchor="top"))
-            st.plotly_chart(lf, width="stretch", config=cfgc, key="cmb_oc")
-            last = to_unit("KC", kc_origin_certs(kc).iloc[-1], unit).sort_values(ascending=False)
-            last = last[last > 0]
-            out = [f"<div class='rwrap' style='height:auto'><table class='rpt cmp'><thead><tr class='h2'><th class='dt'>Origin</th>"
-                   f"<th>Certs ({unit})</th><th>Share</th></tr></thead><tbody>"]
-            for o, v in last.items():
-                out.append(f"<tr><td class='d'>{o}</td><td>{_fmt_i(v)}</td><td>{v / last.sum() * 100:.1f}%</td></tr>")
-            out.append(f"<tr class='tot'><td class='d'>Total</td><td>{_fmt_i(last.sum())}</td><td>100%</td></tr></tbody></table></div>")
-            st.markdown("".join(out), unsafe_allow_html=True)
+        kp_cols = list(kc_gr_wide(g, gdays, "Passed").columns)
+        rc_orig = sorted(gr["OriginName"].unique())
+        origins = ["All origins"] + sorted(set(kp_cols) | set(rc_orig))
+        ports = ["All ports"] + sorted(set(g["Port"].unique()) | set(gr["PortId"].map(CMB_PORT).fillna(gr["PortId"]).unique()))
+        f1, f2, f3, _ = st.columns([1.6, 1.6, 2.2, 2])
+        with f1:
+            st.markdown("<div class='sb-label' style='margin:0 0 2px'>Origin</div>", unsafe_allow_html=True)
+            origin = st.selectbox("Origin", origins, index=0, label_visibility="collapsed", key="cmb_op_origin")
+        with f2:
+            st.markdown("<div class='sb-label' style='margin:0 0 2px'>Port</div>", unsafe_allow_html=True)
+            port = st.selectbox("Port", ports, index=0, label_visibility="collapsed", key="cmb_op_port")
+        with f3:
+            span = pl_span_radio("cmb_op_span", "1Y")
+        a_raw, r_raw = cmb_grading_daily(g, gdays, gr, origin, port)
+        a, r = to_unit("KC", a_raw, unit), to_unit("RC", r_raw, unit)
+        lab = f"{origin} at {port}"
+        left, right = st.columns(2)
+        pl_section("Graded per month")
+        with left:
+            st.plotly_chart(cmb_bar_fig(a, f"Arabica: {lab} ({unit})", NAVY, unit), width="stretch", config=cfgc, key="cmb_op_bar_a")
+        with right:
+            st.plotly_chart(cmb_bar_fig(r, f"Robusta: {lab} ({unit})", AMBER, unit), width="stretch", config=cfgc, key="cmb_op_bar_r")
+        pl_section("Rolling graded: 1 day, 1 week, 1 month")
+        start_a, start_r = pl_start(span, a.index.max()), pl_start(span, r.index.max())
+        left, right = st.columns(2)
+        with left:
+            st.plotly_chart(cmb_rolling_fig(a, f"Arabica: {lab} ({unit})", unit, start_a), width="stretch", config=cfgc, key="cmb_op_roll_a")
+        with right:
+            st.plotly_chart(cmb_rolling_fig(r, f"Robusta: {lab} ({unit})", unit, start_r), width="stretch", config=cfgc, key="cmb_op_roll_r")
 
 
 with st.sidebar:
