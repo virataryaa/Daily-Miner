@@ -1820,7 +1820,8 @@ def kc_gr_pf_bars_fig(mf: pd.DataFrame, title: str, proportion: bool = False, he
     chart_layout(fig, title, height)
     fig.update_layout(barmode="stack", bargap=0.2, xaxis=dict(type="category", tickangle=-90, tickfont=dict(size=9)),
                       yaxis=dict(tickformat=",", ticksuffix="%" if proportion else "", range=[0, 100] if proportion else None),
-                      legend=dict(orientation="h", y=1.08, x=0, xanchor="left", yanchor="bottom"))
+                      legend=dict(orientation="h", y=1.0, x=1, xanchor="right", yanchor="bottom"),
+                      margin=dict(t=56, b=8, l=8, r=8))
     return fig
 
 
