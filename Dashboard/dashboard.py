@@ -323,68 +323,6 @@ def kc_latest_matrix_html(df: pd.DataFrame, latest: pd.Timestamp) -> str:
     return "".join(head) + "".join(body) + "</tbody></table></div>"
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def kc_grading_flow_html(df: pd.DataFrame, height: str = "70vh") -> str:
-    """Daily KC grading-queue flow: Passed/Failed lots, % passed, Pending, Certs level, Certs
-    change, Fresh Pending (= change in Pending + Passed + Failed) and Implied Decerts
-    (= Passed - Certs change). Same formulas as the desk's original Excel/Streamlit prototype."""
-    d = df.sort_values("Date").copy()
-    pass_cols = [f"KC-{p}-PASSGRAD" for p in KC_GRADE_PORTS]
-    fail_cols = [f"KC-{p}-FAILGRAD" for p in KC_GRADE_PORTS]
-    d["Passed"] = d[pass_cols].sum(axis=1, min_count=1)
-    d["Failed"] = d[fail_cols].sum(axis=1, min_count=1)
-    d["PctPassed"] = d["Passed"] / (d["Passed"] + d["Failed"]) * 100
-    d["Pending"] = d["KC-TOT-PENDING"].astype(float)
-    d["Certs"] = d["KC-TOT-TOT"].astype(float)
-    d["CertsChg"] = d["Certs"].diff()
-    d["FreshPending"] = d["Pending"].diff() + d["Passed"].fillna(0) + d["Failed"].fillna(0)
-    d["ImplDecerts"] = d["Passed"].fillna(0) - d["CertsChg"]
-    d = d.dropna(subset=["CertsChg"]).sort_values("Date", ascending=False)
-
-    p_scale = max(d["Passed"].max(), 1)
-    f_scale = max(d["Failed"].max(), 1)
-    c_scale = max(d["CertsChg"].abs().max(), 1)
-    fp_scale = max(d["FreshPending"].abs().max(), 1)
-    id_scale = max(d["ImplDecerts"].abs().max(), 1)
-
-    def num(v):
-        return "" if pd.isna(v) or v == 0 else f"{v:,.0f}"
-
-    def pct(v):
-        return "" if pd.isna(v) else f"{v:.0f}%"
-
-    def heat(v, sc, rgb):
-        if pd.isna(v) or v == 0:
-            return "<td></td>"
-        alpha = min(abs(v) / sc, 1.0) * 0.85
-        return f"<td style='background:rgba({rgb},{alpha:.2f})'>{v:,.0f}</td>"
-
-    def signed(v, sc):
-        if pd.isna(v):
-            return "<td class='na'></td>"
-        bar = f"<i class='{'up' if v > 0 else 'dn'}' style='width:{abs(v) / sc * 50:.1f}%'></i>" if v else ""
-        cls = "pos" if v > 0 else "neg" if v < 0 else ""
-        return f"<td class='cb'>{bar}<span class='{cls}'>{v:+,.0f}</span></td>"
-
-    head = ["<div class='rwrap' style='height:", height, "'><table class='rpt'><thead><tr class='h2'>",
-            "<th class='dt'>Date</th><th>Passed</th><th>Failed</th><th>%</th><th class='sep'>Pending</th>",
-            "<th>Certs</th><th>Certs Change</th><th>Fresh Pending</th><th>Impl Decerts</th></tr></thead><tbody>"]
-    body = []
-    for _, r in d.iterrows():
-        row = [f"<tr><td class='d'>{r['Date'].strftime('%d-%b-%y')}</td>"]
-        row.append(heat(r["Passed"], p_scale, "31,157,111"))
-        row.append(heat(r["Failed"], f_scale, "201,74,74"))
-        row.append(f"<td>{pct(r['PctPassed'])}</td>")
-        row.append(f"<td class='sep'>{num(r['Pending'])}</td>")
-        row.append(f"<td class='tot'>{num(r['Certs'])}</td>")
-        row.append(signed(r["CertsChg"], c_scale))
-        row.append(heat(r["FreshPending"], fp_scale, "31,157,111"))
-        row.append(heat(r["ImplDecerts"], id_scale, "201,74,74"))
-        row.append("</tr>")
-        body.append("".join(row))
-    return "".join(head) + "".join(body) + "</tbody></table></div>"
-
-
 def fmt_int(v):
     return "-" if pd.isna(v) else f"{int(v):,}"
 
@@ -1968,7 +1906,32 @@ _ABBR = {v: k for k, v in KC_ORIGIN_NAMES.items()}
 _ABBR["Other"] = "OTH"
 
 
-def _cg_head(first_col: str, cols: list, with_rate: bool = False) -> list:
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_queue_frame(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame) -> pd.DataFrame:
+    """Per reported day: Failed bags, Pending stock, Certs level and Fresh Pending (= change in Pending + Passed + Failed)."""
+    days = pd.DatetimeIndex(days)
+    p = kc_gr_wide(g, pd.Series(days), "Passed").sum(axis=1)
+    f = kc_gr_wide(g, pd.Series(days), "Failed").sum(axis=1)
+    pend = kc_gr_wide(g, pd.Series(days), "Pending").sum(axis=1)
+    tot = kc.set_index("Date")["KC-TOT-TOT"].astype(float)
+    return pd.DataFrame({"Failed": f, "Pending": pend, "Certs": tot.reindex(days), "Fresh": pend.diff() + p + f})
+
+
+def _cg_queue_cells(q, sc: dict) -> str:
+    """Grading Queue group: Failed | Pending | Certs level | Fresh Pending."""
+    if q is None:
+        return "<td class='na sep'></td><td class='na'></td><td class='na'></td><td class='na'></td>"
+    pend = "" if pd.isna(q["Pending"]) or not q["Pending"] else _fmt_i(q["Pending"])
+    cert = "" if pd.isna(q["Certs"]) else _fmt_i(q["Certs"])
+    return (_heat_td(q["Failed"], sc["qf"], "201,74,74").replace("<td", "<td class='sep'", 1)
+            + f"<td>{pend}</td><td class='tot'>{cert}</td>" + _heat_td(q["Fresh"], sc["qfp"]))
+
+
+def _queue_scales(q: pd.DataFrame) -> dict:
+    return {"qf": max(float(q["Failed"].max()), 1.0), "qfp": max(float(q["Fresh"].abs().max()), 1.0)}
+
+
+def _cg_head(first_col: str, cols: list, with_rate: bool = False, with_queue: bool = False) -> list:
     """Header for the Certs & Grading tables: Passed | (Pass %) | Certs Change | Usage, each split by origin plus a Total."""
     n = len(cols) + 1
     h = ["<table class='rpt cmp" + (" tiny" if with_rate else "") + "'><thead><tr class='h1'>",
@@ -1977,7 +1940,10 @@ def _cg_head(first_col: str, cols: list, with_rate: bool = False) -> list:
     if with_rate:
         h.append(f"<th colspan='{n}' class='sep'>Pass % by Origin</th>")
     h += [f"<th colspan='{n}' class='sep certs-hdr'>Certs Change by Origin</th>",
-          f"<th colspan='{n}' class='sep certs-hdr'>Usage by Origin</th></tr><tr class='h2'>"]
+          f"<th colspan='{n}' class='sep certs-hdr'>Usage by Origin</th>"]
+    if with_queue:
+        h.append("<th colspan='4' class='sep'>Grading Queue</th>")
+    h.append("</tr><tr class='h2'>")
     groups = 4 if with_rate else 3
     for grp in range(groups):
         certs = grp >= groups - 2
@@ -1987,6 +1953,8 @@ def _cg_head(first_col: str, cols: list, with_rate: bool = False) -> list:
             cls = ("certs-hdr" if certs else "") + (" sep" if (sep_first and i == 0) else "") + (" pr" if is_pr else "")
             lbl = (_ABBR.get(o, o[:3].upper()) if o != "Total" else "Tot") if is_pr else o
             h.append(f"<th class='{cls.strip()}'>{lbl}</th>" if cls.strip() else f"<th>{lbl}</th>")
+    if with_queue:
+        h.append("<th class='sep'>Failed</th><th>Pending</th><th>Certs</th><th>Fresh Pending</th>")
     h.append("</tr></thead><tbody>")
     return h
 
@@ -2000,7 +1968,7 @@ def _rate_td(v, sep: bool = False) -> str:
 
 
 def _cg_row(label: str, pas: pd.Series, chg: pd.Series, use: pd.Series, cols: list, sc: dict, has: bool = True,
-            rate: pd.Series = None) -> str:
+            rate: pd.Series = None, queue=None, with_queue: bool = False) -> str:
     """One data row: Passed cells, (Pass % cells), Certs-change cells, Usage cells (origins then a Total each)."""
     r = [f"<tr><td class='d'>{label}</td>"]
     r += [_heat_td(pas[o], sc["p"]) for o in cols] + [_bar_td(pas.sum(), sc["pt"])]
@@ -2013,6 +1981,8 @@ def _cg_row(label: str, pas: pd.Series, chg: pd.Series, use: pd.Series, cols: li
             r += cells + [_delta_td(ser.sum(), tsc)]
     else:
         r += ["<td class='na sep'></td>"] + ["<td class='na'></td>"] * len(cols) + ["<td class='na sep'></td>"] + ["<td class='na'></td>"] * len(cols)
+    if with_queue:
+        r.append(_cg_queue_cells(queue, sc))
     return "".join(r) + "</tr>"
 
 
@@ -2027,7 +1997,7 @@ def _rate_frame(pp: pd.DataFrame, ff: pd.DataFrame, f_all_total: pd.Series) -> p
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def kc_cg_monthly_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, show_all: bool = False,
-                       height: str = "auto", with_rate: bool = False) -> str:
+                       height: str = "auto", with_rate: bool = False, with_queue: bool = False) -> str:
     days = pd.DatetimeIndex(days)
     d = kc_cg_daily(g, pd.Series(days), kc)
     p = kc_gr_wide(g, pd.Series(days), "Passed").reindex(d.index)
@@ -2043,15 +2013,22 @@ def kc_cg_monthly_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, show_
           "u": max(float(use_m.abs().max().max()), 1.0), "ut": max(float(use_m.sum(axis=1).abs().max()), 1.0)}
     out = ["<div class='mt' style='margin-bottom:4px'>Monthly Grading, Certs Change and Usage by Origin (bags)</div>",
            f"<div class='rwrap' style='height:{height}'>"]
-    out += _cg_head("Month", cols, with_rate)
+    out += _cg_head("Month", cols, with_rate, with_queue)
+    qm = None
+    if with_queue:
+        qd = kc_queue_frame(g, pd.Series(days), kc).reindex(d.index)
+        qm = pd.DataFrame({"Failed": qd["Failed"].groupby(per).sum(), "Pending": qd["Pending"].groupby(per).last(),
+                           "Certs": qd["Certs"].groupby(per).last(), "Fresh": qd["Fresh"].groupby(per).sum()})
+        sc.update(_queue_scales(qm))
     for pr in lots.index[::-1]:
-        out.append(_cg_row(pr.strftime("%b %Y"), lots.loc[pr], chg_m.loc[pr], use_m.loc[pr], cols, sc, True, rate.loc[pr] if with_rate else None))
+        out.append(_cg_row(pr.strftime("%b %Y"), lots.loc[pr], chg_m.loc[pr], use_m.loc[pr], cols, sc, True,
+                           rate.loc[pr] if with_rate else None, qm.loc[pr] if with_queue else None, with_queue))
     return "".join(out) + "</tbody></table></div>"
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def kc_cg_daily_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, show_all: bool = False,
-                     height: str = "72vh", with_rate: bool = False) -> str:
+                     height: str = "72vh", with_rate: bool = False, with_queue: bool = False) -> str:
     days = pd.DatetimeIndex(days)
     p = kc_gr_wide(g, pd.Series(days), "Passed")
     f_full = kc_gr_wide(g, pd.Series(days), "Failed")
@@ -2066,10 +2043,14 @@ def kc_cg_daily_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, show_al
           "u": max(float(use.loc[ok.index].abs().max().max()), 1.0), "ut": max(float(use.loc[ok.index].sum(axis=1).abs().max()), 1.0)}
     out = ["<div class='mt' style='margin-bottom:4px'>Daily Grading, Certs Change and Usage by Origin (bags)</div>",
            f"<div class='rwrap' style='height:{height}'>"]
-    out += _cg_head("Date", cols, with_rate)
+    out += _cg_head("Date", cols, with_rate, with_queue)
+    qd = None
+    if with_queue:
+        qd = kc_queue_frame(g, pd.Series(days), kc)
+        sc.update(_queue_scales(qd))
     for dt in days[::-1]:
         out.append(_cg_row(dt.strftime("%d-%b-%y"), pp.loc[dt], cc.loc[dt].fillna(0), use.loc[dt].fillna(0), cols, sc,
-                           dt in d.index, rate.loc[dt] if with_rate else None))
+                           dt in d.index, rate.loc[dt] if with_rate else None, qd.loc[dt] if with_queue else None, with_queue))
     return "".join(out) + "</tbody></table></div>"
 
 
@@ -2135,7 +2116,7 @@ def kc_cg_usage_port(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame) -> pd.D
     return p - kc_port_certs(kc).diff().reindex(d.index).fillna(0)
 
 
-def _cg_port_head(first_col: str, cols: list, with_rate: bool = False) -> list:
+def _cg_port_head(first_col: str, cols: list, with_rate: bool = False, with_queue: bool = False) -> list:
     """Three header rows: group (Passed | Pass % | Certs Change | Usage), country band, port codes."""
     groups = []
     for c in cols:
@@ -2154,6 +2135,8 @@ def _cg_port_head(first_col: str, cols: list, with_rate: bool = False) -> list:
          f"<th class='dt' rowspan='3'>{first_col}</th>"]
     for gi, (title, certs) in enumerate(blocks):
         h.append(f"<th colspan='{n}'{' class=certs-hdr' if certs else ''}{' style=' + repr(edge) if gi else ''}>{title}</th>")
+    if with_queue:
+        h.append(f"<th colspan='4' style={edge!r}>Grading Queue</th>")
     h.append("</tr><tr class='h2'>")
     for gi in range(len(blocks)):
         for i, (ct, k) in enumerate(groups):
@@ -2163,6 +2146,9 @@ def _cg_port_head(first_col: str, cols: list, with_rate: bool = False) -> list:
                      f"text-transform:uppercase'>{ct}</th>")
         tcls = "certs-hdr" if blocks[gi][1] else ("pr" if (with_rate and gi == 1) else "")
         h.append(f"<th rowspan='2'{' class=' + tcls if tcls else ''}>{'Tot' if (with_rate and gi == 1) else 'Total'}</th>")
+    if with_queue:
+        h.append(f"<th rowspan='2' style={edge!r}>Failed</th><th rowspan='2'>Pending</th><th rowspan='2'>Certs</th>"
+                 "<th rowspan='2'>Fresh Pending</th>")
     h.append("</tr><tr class='h3'>")
     for gi in range(len(blocks)):
         k = 0
@@ -2180,7 +2166,7 @@ def _cg_port_head(first_col: str, cols: list, with_rate: bool = False) -> list:
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def kc_cg_port_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, monthly: bool, height: str = "auto",
-                    with_rate: bool = False) -> str:
+                    with_rate: bool = False, with_queue: bool = False) -> str:
     days = pd.DatetimeIndex(days)
     d = kc_cg_daily(g, pd.Series(days), kc)
     pas_all = kc_gr_wide(g, pd.Series(days), "Passed", by="Port").reindex(columns=KC_GR_PORTS, fill_value=0)
@@ -2207,10 +2193,21 @@ def kc_cg_port_html(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, monthly:
           "u": max(float(use.loc[okr].abs().max().max()), 1.0), "ut": max(float(use.loc[okr].sum(axis=1).abs().max()), 1.0)}
     out = [f"<div class='mt' style='margin-bottom:4px'>{title} Grading, Certs Change and Usage by Port (bags)</div>",
            f"<div class='rwrap' style='height:{height}'>"]
-    out += _cg_port_head(first, cols, with_rate)
+    out += _cg_port_head(first, cols, with_rate, with_queue)
+    qq = None
+    if with_queue:
+        qd = kc_queue_frame(g, pd.Series(days), kc)
+        if monthly:
+            qdm = qd.reindex(d.index)
+            per = d.index.to_period("M")
+            qq = pd.DataFrame({"Failed": qdm["Failed"].groupby(per).sum(), "Pending": qdm["Pending"].groupby(per).last(),
+                               "Certs": qdm["Certs"].groupby(per).last(), "Fresh": qdm["Fresh"].groupby(per).sum()})
+        else:
+            qq = qd
+        sc.update(_queue_scales(qq))
     for key, label, has in rows:
         out.append(_cg_row(label, pas.loc[key], chg.loc[key], use.loc[key], cols, sc, has,
-                           rate.loc[key] if with_rate else None))
+                           rate.loc[key] if with_rate else None, qq.loc[key] if with_queue else None, with_queue))
     return "".join(out) + "</tbody></table></div>"
 
 
@@ -2597,9 +2594,6 @@ if commodity == "Coffee":
                 st.markdown(kc_cg_monthly_html(g, gdays, kc, t_all), unsafe_allow_html=True)
                 st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
                 st.markdown(kc_cg_daily_html(g, gdays, kc, t_all), unsafe_allow_html=True)
-                st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-                st.markdown("<div class='mt'>KC Grading Flow (bags)</div>", unsafe_allow_html=True)
-                st.markdown(kc_grading_flow_html(kc), unsafe_allow_html=True)
 
             elif ar_cg_view == "Usage Per Port":
                 st.markdown(kc_cg_port_html(g, gdays, kc, True), unsafe_allow_html=True)
@@ -2670,13 +2664,13 @@ if commodity == "Coffee":
                     cv_all = st.radio("Origins", ["Top 5 + Other", "Show all origins"], horizontal=True,
                                       label_visibility="collapsed", key="acv_origins") == "Show all origins"
             if cv_split == "Origin":
-                st.markdown(kc_cg_daily_html(g, gdays, kc, cv_all, "72vh", True), unsafe_allow_html=True)
+                st.markdown(kc_cg_daily_html(g, gdays, kc, cv_all, "72vh", True, True), unsafe_allow_html=True)
                 st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-                st.markdown(kc_cg_monthly_html(g, gdays, kc, cv_all, "auto", True), unsafe_allow_html=True)
+                st.markdown(kc_cg_monthly_html(g, gdays, kc, cv_all, "auto", True, True), unsafe_allow_html=True)
             else:
-                st.markdown(kc_cg_port_html(g, gdays, kc, False, "72vh", True), unsafe_allow_html=True)
+                st.markdown(kc_cg_port_html(g, gdays, kc, False, "72vh", True, True), unsafe_allow_html=True)
                 st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-                st.markdown(kc_cg_port_html(g, gdays, kc, True, "auto", True), unsafe_allow_html=True)
+                st.markdown(kc_cg_port_html(g, gdays, kc, True, "auto", True, True), unsafe_allow_html=True)
     else:
         # A plain st.radio (not st.tabs) is used for these two levels of navigation: st.tabs
         # renders every tab's body on every rerun regardless of which one is showing, whereas a
