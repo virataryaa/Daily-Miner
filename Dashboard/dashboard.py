@@ -118,6 +118,7 @@ span[data-baseweb="tag"] svg { fill: #ffffff !important; }
 .rpt thead tr.h2 th { top: 24px; height: 22px; background: #0f2c70; }
 .rpt thead tr.h3 th { top: 46px; height: 22px; }
 .rpt thead th.gs { border-left: 1px solid rgba(255,255,255,.28); }
+.rpt thead th.certs-hdr { background: #9c6a17 !important; }
 .rpt td.gs { border-left: 1px solid #dfe3ee; }
 .rpt thead th.dt { top: 0; z-index: 3; }
 .rpt .sep { border-left: 2px solid #0a2463; }
@@ -855,8 +856,8 @@ def monthly_grading_certs_html(gr: pd.DataFrame, certs: pd.DataFrame, grade: str
             "<div class='rwrap' style='height:", height, "'><table class='rpt'><thead>",
             "<tr class='h1'><th class='dt' rowspan='2'>Month</th>",
             f"<th colspan='{len(origins) + 1}'>Lots Graded by Origin</th>",
-            "<th colspan='2' class='sep'>LRC Certs</th></tr><tr class='h2'>"]
-    head += [f"<th>{o}</th>" for o in origins] + ["<th>Total</th><th class='sep'>Change</th><th>Usage</th></tr></thead><tbody>"]
+            "<th colspan='2' class='sep certs-hdr'>LRC Certs</th></tr><tr class='h2'>"]
+    head += [f"<th>{o}</th>" for o in origins] + ["<th>Total</th><th class='sep certs-hdr'>Change</th><th class='certs-hdr'>Usage</th></tr></thead><tbody>"]
 
     body = []
     for pr in months:
@@ -872,16 +873,25 @@ def monthly_grading_certs_html(gr: pd.DataFrame, certs: pd.DataFrame, grade: str
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def daily_grading_certs_html(gr: pd.DataFrame, certs: pd.DataFrame, grade: str = "VG",
-                             height: str = "60vh") -> str:
+                             height: str = "60vh", lag: int = 1) -> str:
     """Same idea as monthly_grading_certs_html, one row per calendar day instead of month: grading
     lots by origin only show up on days a panel actually ran, LRC certs change is day-over-day.
-    Capped to grading's own range (from Jan 2022)."""
+    Capped to grading's own range (from Jan 2022).
+
+    `lag`: a day's grading isn't reflected in certified stocks until it clears, so the Change/Usage
+    columns for a given row look `lag` certs-trading-days ahead of that row's own date (default 1 -
+    today's grading shows up in tomorrow's certs print). The row's date itself doesn't move."""
     lots = gr.groupby([gr["PanelDate"], "OriginName"])["NoLots"].sum().unstack(fill_value=0)
     lots_tot = lots.sum(axis=1)
     origins = list(lots.sum().sort_values(ascending=False).index)
 
     ser = certs.set_index("Date")[f"LRC-TOT-{grade}"].dropna().astype(float)
     chg = ser.diff().dropna()
+    cd = list(chg.index.sort_values())
+
+    def lagged_chg(d):
+        i = np.searchsorted(cd, d) + lag
+        return chg.loc[cd[i]] if 0 <= i < len(cd) else np.nan
 
     g_start = gr["PanelDate"].min()
     days = sorted([d for d in (set(lots_tot.index) | set(chg.index)) if d >= g_start], reverse=True)
@@ -889,9 +899,11 @@ def daily_grading_certs_html(gr: pd.DataFrame, certs: pd.DataFrame, grade: str =
         return "<div class='rwrap' style='padding:14px'>No data.</div>"
     all_max = max(float(lots[origins].max().max()), 1.0)
     l_scale = max(float(lots_tot.max()), 1.0)
-    c_scale = max(chg.abs().max(), 1) if len(chg) else 1
-    usage = lots_tot.reindex(chg.index, fill_value=0) - chg
-    u_scale = max(usage.abs().max(), 1) if len(usage) else 1
+    used_chg = {d: lagged_chg(d) for d in days}
+    used_use = {d: (0.0 if pd.isna(lots_tot.get(d)) else lots_tot.get(d)) - used_chg[d]
+               for d in days if pd.notna(used_chg[d])}
+    c_scale = max((abs(v) for v in used_chg.values() if pd.notna(v)), default=1) or 1
+    u_scale = max((abs(v) for v in used_use.values()), default=1) or 1
 
     def lcell(v):
         if pd.isna(v) or v == 0:
@@ -913,31 +925,32 @@ def daily_grading_certs_html(gr: pd.DataFrame, certs: pd.DataFrame, grade: str =
         cls = "pos" if v > 0 else "neg" if v < 0 else ""
         return f"<td class='cb sep'>{bar}<span class='{cls}'>{v:+,}</span></td>"
 
-    def usecell(g, c):
+    def usecell(v):
         # Usage = Grading - Certs change: lots graded that weren't offset by a matching rise in
         # certified stocks (i.e. graded coffee that left the certified pool / was used).
-        if pd.isna(c):
+        if pd.isna(v):
             return "<td class='na'></td>"
-        g = 0 if pd.isna(g) else g
-        v = int(round(g - c))
+        v = int(round(v))
         bar = f"<i class='{'up' if v > 0 else 'dn'}' style='width:{abs(v) / u_scale * 50:.1f}%'></i>" if v else ""
         cls = "pos" if v > 0 else "neg" if v < 0 else ""
         return f"<td class='cb'>{bar}<span class='{cls}'>{v:+,}</span></td>"
 
-    head = ["<div class='mt' style='margin-bottom:4px'>Grading (lots) & LRC Certified Stocks Change (lots), by day</div>",
+    lag_note = "same certs day" if lag == 0 else f"certs {lag} certs-day{'s' if lag != 1 else ''} after"
+    head = [f"<div class='mt' style='margin-bottom:4px'>Grading (lots) & LRC Certified Stocks Change (lots), by day "
+            f"&mdash; {lag_note} the grading date</div>",
             "<div class='rwrap' style='height:", height, "'><table class='rpt'><thead>",
             "<tr class='h1'><th class='dt' rowspan='2'>Date</th>",
             f"<th colspan='{len(origins) + 1}'>Lots Graded by Origin</th>",
-            "<th colspan='2' class='sep'>LRC Certs</th></tr><tr class='h2'>"]
-    head += [f"<th>{o}</th>" for o in origins] + ["<th>Total</th><th class='sep'>Change</th><th>Usage</th></tr></thead><tbody>"]
+            "<th colspan='2' class='sep certs-hdr'>LRC Certs</th></tr><tr class='h2'>"]
+    head += [f"<th>{o}</th>" for o in origins] + ["<th>Total</th><th class='sep certs-hdr'>Change</th><th class='certs-hdr'>Usage</th></tr></thead><tbody>"]
 
     body = []
     for d in days:
         row = [f"<tr><td class='d'>{d.strftime('%d-%b-%y')}</td>"]
         row += [lcell(lots.loc[d, o] if d in lots.index else np.nan) for o in origins]
         row.append(totcell(lots_tot.get(d, 0), l_scale))
-        row.append(chgcell(chg.get(d, np.nan)))
-        row.append(usecell(lots_tot.get(d, np.nan), chg.get(d, np.nan)))
+        row.append(chgcell(used_chg.get(d, np.nan)))
+        row.append(usecell(used_use.get(d, np.nan)))
         row.append("</tr>")
         body.append("".join(row))
     return "".join(head) + "".join(body) + "</tbody></table></div>"
@@ -1143,7 +1156,9 @@ if commodity == "Coffee":
             if rcg_view == "Data Table":
                 st.markdown(monthly_grading_certs_html(gr, certs), unsafe_allow_html=True)
                 st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-                st.markdown(daily_grading_certs_html(gr, certs), unsafe_allow_html=True)
+                lag_pick = st.radio("Certs lag", ["0d", "1d", "2d", "3d"], index=1, horizontal=True,
+                                    label_visibility="collapsed", key="rcg_lag")
+                st.markdown(daily_grading_certs_html(gr, certs, lag=int(lag_pick[0])), unsafe_allow_html=True)
             else:
                 st.markdown("<div class='card-desc'>Coming next.</div>", unsafe_allow_html=True)
 else:
