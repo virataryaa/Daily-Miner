@@ -2211,7 +2211,7 @@ if commodity == "Coffee":
     if coffee_section == "Arabica":
         kc = load_kc_certs()
         with st.container(key="rc_section_box"):
-            ar_section = st.radio("Arabica section", ["Certs", "Grading", "Usage", "Comprehensive View"], horizontal=True,
+            ar_section = st.radio("Arabica section", ["Comprehensive View", "Certs", "Grading", "Usage"], horizontal=True,
                                   label_visibility="collapsed", key="ar_section")
         st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
