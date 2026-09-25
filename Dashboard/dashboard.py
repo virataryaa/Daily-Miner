@@ -250,11 +250,11 @@ def kc_change_matrix_html(df: pd.DataFrame, older: pd.Timestamp, latest: pd.Time
     body = []
     for o in origins:
         row = [f"<tr><td class='d l'>{KC_ORIGIN_NAMES[o]}</td>"]
-        row += [scell(grid[(o, p)]) for p in ports]
+        row += [_kc_gs(scell(grid[(o, p)]), p) for p in ports]
         row.append(totcell(row_tot[o], sep=True))
         row.append("</tr>")
         body.append("".join(row))
-    body.append("<tr><td class='d l tot'>Total</td>" + "".join(totcell(col_tot[p]) for p in ports) +
+    body.append("<tr><td class='d l tot'>Total</td>" + "".join(_kc_gs(totcell(col_tot[p]), p) for p in ports) +
                totcell(grand, sep=True) + "</tr>")
     return "".join(head) + "".join(body) + "</tbody></table></div>"
 
@@ -303,15 +303,15 @@ def kc_latest_matrix_html(df: pd.DataFrame, latest: pd.Timestamp) -> str:
     body = []
     for o in origins:
         row = [f"<tr><td class='d l'>{KC_ORIGIN_NAMES[o]}</td>"]
-        row += [cell(grid[(o, p)]) for p in ports]
+        row += [_kc_gs(cell(grid[(o, p)]), p) for p in ports]
         row.append(totcell(row_tot[o], sep=True))
         row.append(pctcell(row_tot[o], sep=True))
         row.append("</tr>")
         body.append("".join(row))
-    body.append("<tr><td class='d l tot'>Total</td>" + "".join(totcell(col_tot[p]) for p in ports) +
+    body.append("<tr><td class='d l tot'>Total</td>" + "".join(_kc_gs(totcell(col_tot[p]), p) for p in ports) +
                totcell(grand, sep=True) + "<td class='sep'></td></tr>")
     body.append("<tr><td class='d l tot'>Port %</td>" +
-               "".join(pctcell(col_tot[p]) for p in ports) + "<td class='sep'></td><td class='sep'></td></tr>")
+               "".join(_kc_gs(pctcell(col_tot[p]), p) for p in ports) + "<td class='sep'></td><td class='sep'></td></tr>")
     return "".join(head) + "".join(body) + "</tbody></table></div>"
 
 
@@ -1851,8 +1851,11 @@ def kc_gr_port_html(g: pd.DataFrame, days: pd.Series, tag: str, start: pd.Timest
             groups.append([ct, 1])
     out = ["<div class='rwrap' style='height:auto'><table class='rpt static cmp'><thead><tr class='h1'>",
            "<th class='dt' rowspan='2'>Origin</th>"]
-    out += [f"<th colspan='{n}' class='gs'>{ct}</th>" for ct, n in groups] + ["<th class='sep' rowspan='2'>Total</th></tr><tr class='h2'>"]
-    out += [f"<th>{KC_GR_PORT_SHORT[c]}</th>" for c in cols] + ["</tr></thead><tbody>"]
+    out += [f"<th colspan='{n}' style='background:{KC_COUNTRY_COLORS[ct]};letter-spacing:.09em;text-transform:uppercase;"
+            f"border-left:2px solid #ffffff'>{ct}</th>" for ct, n in groups]
+    out += ["<th class='sep' rowspan='2'>Total</th></tr><tr class='h2'>"]
+    out += [f"<th style='background:color-mix(in srgb, {KC_COUNTRY_COLORS[KC_GR_PORT_COUNTRY[c]]} 58%, #0a2463)'>"
+            f"{KC_GR_PORT_SHORT[c]}</th>" for c in cols] + ["</tr></thead><tbody>"]
     for o in m.index:
         out.append(f"<tr><td class='d'>{o}</td>" + "".join(_heat_td(m.loc[o, c], mx, rgb) for c in cols)
                    + f"<td class='tot sep'>{_fmt_i(m.loc[o].sum())}</td></tr>")
@@ -1862,28 +1865,40 @@ def kc_gr_port_html(g: pd.DataFrame, days: pd.Series, tag: str, start: pd.Timest
 
 
 KC_PORT_COUNTRY = {"AN": "Belgium", "BA": "Spain", "HA": "Germany", "HO": "USA", "MI": "USA", "NO": "USA", "NY": "USA"}
-KC_COUNTRY_COLORS = {"Belgium": NAVY, "Spain": AMBER, "Germany": GREEN, "USA": TEAL}
+KC_COUNTRY_COLORS = {"Belgium": AMBER, "Spain": RED, "Germany": GREEN, "USA": TEAL}
+KC_GROUP_START = {"BA": "gs", "HA": "gs", "HO": "sep"}  # Europe|USA gets the heavy divider
+
+
+def _kc_gs(td: str, p: str) -> str:
+    """Add the group-divider class for the first port of a country to an already-built <td>."""
+    cls = KC_GROUP_START.get(p)
+    return td.replace("class='", f"class='{cls} ", 1) if cls and "class='" in td else td
 
 
 def kc_matrix_head(ports: list, extra: list) -> list:
-    """Two header rows for the Arabica origin x port matrices: country over port codes."""
+    """Two header rows for the Arabica origin x port matrices: a colour-coded country band over the
+    port codes (ports shaded in their country's colour), Europe on the left and USA on the right."""
     groups = []
     for p in ports:
         c = KC_PORT_COUNTRY[p]
         if groups and groups[-1][0] == c:
-            groups[-1][1] += 1
+            groups[-1][1].append(p)
         else:
-            groups.append([c, 1])
-    starts, k = set(), 0
-    for _, n in groups:
-        starts.add(k)
-        k += n
+            groups.append([c, [p]])
     h = ["<div class='rwrap' style='height:auto'><table class='rpt static kcmx'><thead><tr class='h1'>",
          "<th class='dt l' rowspan='2'>Origin</th>"]
-    h += [f"<th colspan='{n}' class='gs'>{c}</th>" for c, n in groups]
+    for i, (c, ps) in enumerate(groups):
+        col = KC_COUNTRY_COLORS[c]
+        edge = "border-left:2px solid #ffffff;" if i else ""
+        h.append(f"<th colspan='{len(ps)}' style='background:{col};{edge}letter-spacing:.09em;font-size:11px;"
+                 f"text-transform:uppercase;border-bottom:1px solid rgba(255,255,255,.55)'>{c}</th>")
     h += [f"<th class='sep' rowspan='2'>{e}</th>" for e in extra]
     h += ["</tr><tr class='h2'>"]
-    h += [f"<th{' class=gs' if i in starts else ''}>{KC_PORT_NAMES[p]}</th>" for i, p in enumerate(ports)]
+    for i, (c, ps) in enumerate(groups):
+        col = KC_COUNTRY_COLORS[c]
+        for j, p in enumerate(ps):
+            edge = "border-left:2px solid #ffffff;" if (i and j == 0) else ""
+            h.append(f"<th style='background:color-mix(in srgb, {col} 58%, #0a2463);{edge}'>{KC_PORT_NAMES[p]}</th>")
     h += ["</tr></thead><tbody>"]
     return h
 
