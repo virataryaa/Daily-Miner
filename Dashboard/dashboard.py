@@ -2285,6 +2285,147 @@ def kc_usage_by_origin_fig(g: pd.DataFrame, days: pd.Series, kc: pd.DataFrame, s
     return fig
 
 
+RC_ORIGINS = ["Brazil", "Vietnam", "Indonesia", "Other"]
+RC_ORIGIN_ABBR = {"Brazil": "BRA", "Vietnam": "VIE", "Indonesia": "IND", "Other": "OTH"}
+RC_CERT_PORTS = ["AMS", "ANT", "BAR", "BRE", "FEL", "GEN", "HAM", "LIV", "LON", "NOR", "ROT", "TRI"]
+
+
+def _rc_band(country: str) -> str:
+    return TEAL if country == "USA" else ("#6c7a99" if country == "Other" else "#4a63a8")
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def rc_comp_frames(gr: pd.DataFrame, certs: pd.DataFrame, grade: str = "VG") -> dict:
+    """Everything the Robusta Comprehensive View needs, one row per certs day from the first grading panel.
+    A panel on a day with no certs print is attributed to the next certs day. Certs Change and Usage use the
+    Robusta 1-day lag: a row's grading is compared with the change in certs on the NEXT certs day."""
+    c = certs.set_index("Date")
+    tot = c[f"LRC-TOT-{grade}"].dropna().astype(float)
+    chg_tot = tot.diff().dropna()
+    cd = pd.DatetimeIndex(chg_tot.index.sort_values())
+    idx = cd[cd >= gr["PanelDate"].min()]
+    pos = cd.searchsorted(gr["PanelDate"])
+    keep = pos < len(cd)
+    gg = gr[keep].assign(Day=cd[pos[keep]])
+
+    def piv(df, col):
+        return df.groupby(["Day", col])["NoLots"].sum().unstack(fill_value=0).reindex(idx, fill_value=0)
+
+    lots_o = piv(gg, "Origin2").reindex(columns=RC_ORIGINS, fill_value=0)
+    ten_o = piv(gg[gg["Tenderable"] == "Y"], "Origin2").reindex(columns=RC_ORIGINS, fill_value=0)
+    lots_p = piv(gg, "PortId")
+
+    certs_p = pd.DataFrame({p: c[f"LRC-{p}-{grade}"].astype(float) for p in RC_CERT_PORTS
+                            if f"LRC-{p}-{grade}" in c.columns}).ffill(limit=5).fillna(0)
+    ports = sorted(set(lots_p.columns) | set(certs_p.columns))
+    certs_p = certs_p.reindex(columns=ports, fill_value=0)
+    lots_p = lots_p.reindex(columns=ports, fill_value=0)
+
+    nxt = pd.Series(cd[1:], index=cd[:-1])                 # 1 certs day later
+    nd = nxt.reindex(idx)
+    chg_p = certs_p.diff().reindex(nd.values).set_axis(idx)   # NaN on the last day (no next print yet)
+    chg_t = chg_tot.reindex(nd.values).set_axis(idx)
+    use_p = lots_p - chg_p
+    use_t = lots_o.sum(axis=1) - chg_t
+    price = certs_price = c["LRC_Price"].astype(float) if "LRC_Price" in c.columns else pd.Series(dtype=float)
+    return {"idx": idx, "lots_o": lots_o, "ten_o": ten_o, "lots_p": lots_p, "chg_p": chg_p, "chg_t": chg_t,
+            "use_p": use_p, "use_t": use_t, "level": tot.reindex(idx), "price": price.reindex(idx),
+            "price_chg": price.diff().reindex(idx), "ports": ports}
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def rc_comp_html(gr: pd.DataFrame, certs: pd.DataFrame, monthly: bool, show_all: bool = False,
+                 height: str = "72vh", grade: str = "VG") -> str:
+    f = rc_comp_frames(gr, certs, grade)
+    idx = f["idx"]
+    per = idx.to_period("M")
+
+    def agg(x, how="sum"):
+        if not monthly:
+            return x
+        gb = x.groupby(per)
+        return gb.sum() if how == "sum" else gb.last()
+
+    lots_o, ten_o = agg(f["lots_o"]), agg(f["ten_o"])
+    lots_p, chg_p, use_p = agg(f["lots_p"]), agg(f["chg_p"]), agg(f["use_p"])
+    chg_t, use_t = agg(f["chg_t"]), agg(f["use_t"])
+    level, price = agg(f["level"], "last"), agg(f["price"], "last")
+    price_chg = agg(f["price_chg"])
+    rank = f["lots_p"].sum().sort_values(ascending=False)
+    ranked = [p for p in rank.index if rank[p] > 0] + [p for p in f["ports"] if rank.get(p, 0) == 0
+                                                       and f["chg_p"][p].abs().sum() > 0]
+    shown = ranked if show_all else ranked[:5]
+    rest = [p for p in f["ports"] if p not in shown]
+
+    def cols_of(x):
+        out = x.reindex(columns=shown, fill_value=0).copy()
+        if rest and not show_all:
+            out["Other"] = x.reindex(columns=rest, fill_value=0).sum(axis=1)
+        return out
+
+    lp, cp, up = cols_of(lots_p), cols_of(chg_p), cols_of(use_p)
+    pcols = list(cp.columns)
+    pct = ten_o / lots_o.replace(0, np.nan) * 100
+    pct["Total"] = ten_o.sum(axis=1) / lots_o.sum(axis=1).replace(0, np.nan) * 100
+
+    groups = []
+    for p in pcols:
+        ct = PORT_COUNTRY.get(p, "Other")
+        if groups and groups[-1][0] == ct:
+            groups[-1][1] += 1
+        else:
+            groups.append([ct, 1])
+    no = len(RC_ORIGINS) + 1
+    npn = len(pcols) + 1
+    edge = "border-left:2px solid #0a2463;"
+    h = ["<table class='rpt cmp tiny'><thead><tr class='h1'>",
+         f"<th class='dt' rowspan='3'>{'Month' if monthly else 'Date'}</th>",
+         f"<th colspan='{no}'>Lots Graded by Origin</th>", f"<th colspan='{no}' class='sep'>Pass % (Tenderable Y / all)</th>",
+         f"<th colspan='{npn}' class='sep certs-hdr'>Certs Change by Port (1-day lag)</th>",
+         f"<th colspan='{npn}' class='sep certs-hdr'>Usage by Port (1-day lag)</th>",
+         "<th colspan='1' class='sep certs-hdr'>Certs</th><th colspan='2' class='sep'>Price</th></tr><tr class='h2'>"]
+    h += [f"<th rowspan='2'>{o}</th>" for o in RC_ORIGINS] + ["<th rowspan='2'>Total</th>"]
+    h += [f"<th rowspan='2' class='pr{' sep' if i == 0 else ''}'>{RC_ORIGIN_ABBR[o]}</th>" for i, o in enumerate(RC_ORIGINS)]
+    h += ["<th rowspan='2' class='pr'>Tot</th>"]
+    for gi in range(2):
+        for i, (ct, k) in enumerate(groups):
+            e = edge if (i == 0) else "border-left:2px solid #ffffff;"
+            h.append(f"<th colspan='{k}' style='background:{_rc_band(ct)};{e}letter-spacing:.06em;text-transform:uppercase'>{ct}</th>")
+        h.append("<th rowspan='2' class='certs-hdr'>Total</th>")
+    h += ["<th rowspan='2' class='certs-hdr sep'>Level</th><th rowspan='2' class='sep'>LRC</th><th rowspan='2'>Chg</th></tr><tr class='h3'>"]
+    for gi in range(2):
+        k = 0
+        for i, (ct, kk) in enumerate(groups):
+            for j in range(kk):
+                e = edge if (i == 0 and j == 0) else ("border-left:2px solid #ffffff;" if j == 0 else "")
+                h.append(f"<th style='background:color-mix(in srgb, {_rc_band(ct)} 58%, #0a2463);{e}'>{pcols[k]}</th>")
+                k += 1
+    h.append("</tr></thead><tbody>")
+
+    mx = {"l": max(float(lots_o.max().max()), 1.0), "lt": max(float(lots_o.sum(axis=1).max()), 1.0),
+          "c": max(float(cp.abs().max().max()), 1.0), "ct": max(float(chg_t.abs().max()), 1.0),
+          "u": max(float(up.abs().max().max()), 1.0), "ut": max(float(use_t.abs().max()), 1.0),
+          "pc": max(float(price_chg.abs().max()), 1.0)}
+    keys = list(lots_o.index)[::-1]
+    out = [f"<div class='mt' style='margin-bottom:4px'>{'Monthly' if monthly else 'Daily'} Robusta Grading (lots), "
+           "Certs Change and Usage by Port, 1-day lag</div>", f"<div class='rwrap' style='height:{height}'>"] + h
+    for k in keys:
+        lab = k.strftime("%b %Y") if monthly else k.strftime("%d-%b-%y")
+        r = [f"<tr><td class='d'>{lab}</td>"]
+        r += [_heat_td(lots_o.loc[k, o], mx["l"]) for o in RC_ORIGINS] + [_bar_td(lots_o.loc[k].sum(), mx["lt"])]
+        r += [_rate_td(pct.loc[k, o], i == 0) for i, o in enumerate(RC_ORIGINS)] + [_rate_td(pct.loc[k, "Total"])]
+        for grp, tot_v, sc_i, sc_t in ((cp, chg_t, "c", "ct"), (up, use_t, "u", "ut")):
+            cells = [_chg_heat_td(grp.loc[k, p], mx[sc_i]) for p in pcols]
+            cells[0] = cells[0].replace("<td", "<td class='sep'", 1)
+            r += cells + [_delta_td(tot_v.loc[k], mx[sc_t])]
+        lv, pr_, pchg = level.loc[k], price.loc[k], price_chg.loc[k]
+        r.append(f"<td class='tot sep'>{'' if pd.isna(lv) else _fmt_i(lv)}</td>")
+        r.append(f"<td class='sep'>{'' if pd.isna(pr_) else _fmt_i(pr_)}</td>")
+        r.append(_delta_td(pchg, mx["pc"]) if pd.notna(pchg) else "<td class='na'></td>")
+        out.append("".join(r) + "</tr>")
+    return "".join(out) + "</tbody></table></div>"
+
+
 with st.sidebar:
     st.markdown("<div class='sb-title'>Daily Miner</div>", unsafe_allow_html=True)
     st.markdown("<div class='sb-label'>Commodity</div>", unsafe_allow_html=True)
@@ -2434,10 +2575,10 @@ if commodity == "Coffee":
                 as_f1, as_f2, _ = st.columns([1, 1, 3])
                 with as_f1:
                     as_origin_pick = st.selectbox("Origin", as_origin_opts,
-                                                  index=as_origin_opts.index("Brazil"), key="ac_season_origin")
+                                                  index=0, key="ac_season_origin")
                 with as_f2:
                     as_port_pick = st.selectbox("Port", as_port_opts,
-                                                index=as_port_opts.index("ANT"), key="ac_season_port")
+                                                index=0, key="ac_season_port")
                 as_o_code = "TOT" if as_origin_pick == "Total" else origin_name_to_code[as_origin_pick]
                 as_p_code = "TOT" if as_port_pick == "Total" else port_name_to_code[as_port_pick]
                 as_col = f"KC-{as_o_code}-{as_p_code}"
@@ -2724,11 +2865,20 @@ if commodity == "Coffee":
         # Certs/Grading views, or the sub-views inside them, feel slow - every click anywhere on
         # the page was silently rebuilding every table and chart in every tab, every time.
         with st.container(key="rc_section_box"):
-            rc_section = st.radio("Section", ["Certs", "Grading", "Certs & Grading"], horizontal=True,
+            rc_section = st.radio("Section", ["Comprehensive View", "Certs", "Grading", "Certs & Grading"], horizontal=True,
                                   label_visibility="collapsed", key="rc_section")
         st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
-        if rc_section == "Certs":
+        if rc_section == "Comprehensive View":
+            certs = load_rc_certs()
+            gr = load_rc_grading()
+            rcv_all = st.radio("Ports", ["Top 5 + Other", "Show all ports"], horizontal=True,
+                               label_visibility="collapsed", key="rcv_ports") == "Show all ports"
+            st.markdown(rc_comp_html(gr, certs, False, rcv_all, "72vh"), unsafe_allow_html=True)
+            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            st.markdown(rc_comp_html(gr, certs, True, rcv_all, "auto"), unsafe_allow_html=True)
+
+        elif rc_section == "Certs":
             certs = load_rc_certs()
             end = certs["Date"].max()
             start = end - pd.DateOffset(years=HISTORY_YEARS)
