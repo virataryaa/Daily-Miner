@@ -2798,31 +2798,54 @@ CMB_PORT = {"ANT": "Antwerp", "BAR": "Barcelona", "HAM": "Ham/Bre", "BRE": "Ham/
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def cmb_certs_frame(kc_certs: pd.Series, rc_certs: pd.Series) -> pd.DataFrame:
-    """Daily certs on Arabica's trading days: A = Arabica bags, R = Robusta lots (carried over gaps of up to 5 days)."""
-    df = pd.concat([kc_certs.rename("A"), rc_certs.rename("R")], axis=1)
-    df["R"] = df["R"].ffill(limit=5)
+    """Certs on every business day: A = Arabica bags, R = Robusta lots. Days without a print (holidays, Robusta sparse early
+    years, feed gaps) carry the last value so the charts have no holes; is_kc marks days Arabica really printed."""
+    idx = pd.bdate_range(min(kc_certs.index.min(), rc_certs.index.min()), max(kc_certs.index.max(), rc_certs.index.max()))
+    df = pd.DataFrame({"A": kc_certs.reindex(idx), "R": rc_certs.reindex(idx)})
+    df["is_kc"] = df["A"].notna()
+    df["A"] = df["A"].ffill(limit=25)
+    df["R"] = df["R"].ffill(limit=25)
     return df.dropna(subset=["A", "R"])
 
 
-def cmb_certs_table_html(df: pd.DataFrame, unit: str, nrows: int = 0, height: str = "72vh") -> str:
+def cmb_certs_table_html(df: pd.DataFrame, unit: str, nrows: int = 0, height: str = "72vh", monthly: bool = False) -> str:
+    if monthly:
+        df = df.groupby(df.index.to_period("M"))[["A", "R"]].last()       # month-end (latest print for the current month)
+    else:
+        df = df[df["is_kc"]]                                              # days Arabica really printed
     a, r = to_unit("KC", df["A"], unit), to_unit("RC", df["R"], unit)
     t = a + r
     da, dr, dt = a.diff(), r.diff(), t.diff()
     idx = df.index[::-1]
     if nrows:
         idx = idx[:nrows]
+    when = "Month-end certified stocks and monthly change" if monthly else "Certified stocks and daily change"
+    lab = (lambda d: d.strftime("%b %Y")) if monthly else (lambda d: d.strftime("%d-%b-%y"))
     tsc = max(float(t.max()), 1.0)
     csc = max(float(pd.concat([da, dr]).abs().max()), 1.0)
     tcs = max(float(dt.abs().max()), 1.0)
-    out = [f"<div class='mt' style='margin-bottom:4px'>Certified stocks and daily change, Arabica and Robusta ({unit})</div>",
-           f"<div class='rwrap' style='height:{height}'><table class='rpt cmp'><thead><tr class='h1'><th class='dt' rowspan='2'>Date</th>",
-           "<th colspan='3'>Certified stocks</th><th colspan='3' class='sep certs-hdr'>Change on the day</th></tr><tr class='h2'>",
+    out = [f"<div class='mt' style='margin-bottom:4px'>{when}, Arabica and Robusta ({unit})</div>",
+           f"<div class='rwrap' style='height:{height}'><table class='rpt cmp'><thead><tr class='h1'>"
+           f"<th class='dt' rowspan='2'>{'Month' if monthly else 'Date'}</th>",
+           f"<th colspan='3'>Certified stocks</th><th colspan='3' class='sep certs-hdr'>{'Change on the month' if monthly else 'Change on the day'}</th></tr><tr class='h2'>",
            "<th>Arabica</th><th>Robusta</th><th>Total</th><th class='sep certs-hdr'>Arabica</th><th class='certs-hdr'>Robusta</th>"
            "<th class='certs-hdr'>Total</th></tr></thead><tbody>"]
     for d in idx:
-        out.append(f"<tr><td class='d'>{d.strftime('%d-%b-%y')}</td><td>{_fmt_i(a[d])}</td><td>{_fmt_i(r[d])}</td>{_bar_td(t[d], tsc)}"
+        out.append(f"<tr><td class='d'>{lab(d)}</td><td>{_fmt_i(a[d])}</td><td>{_fmt_i(r[d])}</td>{_bar_td(t[d], tsc)}"
                    + _delta_td(da[d], csc, "cb sep") + _delta_td(dr[d], csc) + _delta_td(dt[d], tcs) + "</tr>")
     return "".join(out) + "</tbody></table></div>"
+
+
+def cmb_certs_line_fig(df: pd.DataFrame, unit: str, height: int = 420) -> go.Figure:
+    a, r = to_unit("KC", df["A"], unit), to_unit("RC", df["R"], unit)
+    fig = go.Figure()
+    for name, ser, col, w, dash in (("Arabica", a, NAVY, 2, None), ("Robusta", r, AMBER, 2, None), ("Total", a + r, "#8a94a8", 1.3, "dot")):
+        fig.add_trace(go.Scatter(x=ser.index, y=ser.values, mode="lines", name=name, line=dict(color=col, width=w, dash=dash),
+                                 hovertemplate="%{y:,.0f}<extra>" + name + "</extra>"))
+    chart_layout(fig, f"Certified stocks by coffee ({unit})", height)
+    fig.update_layout(hovermode="x unified", yaxis=dict(title=unit, tickformat=","),
+                      legend=dict(orientation="h", y=1.02, x=1, xanchor="right", yanchor="bottom"), margin=dict(t=56, b=8, l=8, r=8))
+    return fig
 
 
 def cmb_certs_bar_fig(df: pd.DataFrame, unit: str, height: int = 420) -> go.Figure:
@@ -2948,23 +2971,34 @@ def render_combined(kc: pd.DataFrame, g: pd.DataFrame, gdays: pd.Series, gr: pd.
     top_l, top_r = st.columns([6, 1.6])
     with top_l:
         with st.container(key="rc_view_box"):
-            view = st.radio("View", ["Data Table", "Grading", "Origin & Port"], horizontal=True, label_visibility="collapsed", key="cmb_view")
+            view = st.radio("View", ["Certs Table", "Certs Visuals", "Grading", "Origin & Port"], horizontal=True,
+                            label_visibility="collapsed", key="cmb_view")
     with top_r:
         with st.container(key="cmb_unit_box"):
             unit = st.radio("Unit", ["Bags", "MT"], horizontal=True, label_visibility="collapsed", key="cmb_unit")
     st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
-    if view == "Data Table":
+    if view in ("Certs Table", "Certs Visuals"):
         df = cmb_certs_frame(kc.set_index("Date")["KC-TOT-TOT"].astype(float).dropna(),
                              rc_certs.set_index("Date")["LRC-TOT-VG"].dropna().astype(float))
-        c1, c2, _ = st.columns([1.8, 1.8, 3])
+    if view == "Certs Table":
+        c1, _ = st.columns([1.8, 5])
         with c1:
             n_rows = rows_radio("cmb_rows")
-        with c2:
-            span = pl_span_radio("cmb_span", "3Y")
         st.markdown(cmb_certs_table_html(df, unit, n_rows), unsafe_allow_html=True)
         st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
-        st.plotly_chart(cmb_certs_bar_fig(_since(df, pl_start(span, df.index.max())), unit), width="stretch", config=cfgc, key="cmb_bar")
+        st.markdown(cmb_certs_table_html(df, unit, 0, "auto", True), unsafe_allow_html=True)
+
+    elif view == "Certs Visuals":
+        c1, _ = st.columns([1.8, 5])
+        with c1:
+            span = pl_span_radio("cmb_span", "All")
+        dv = _since(df, pl_start(span, df.index.max()))
+        left, right = st.columns(2)
+        with left:
+            st.plotly_chart(cmb_certs_bar_fig(dv, unit), width="stretch", config=cfgc, key="cmb_bar")
+        with right:
+            st.plotly_chart(cmb_certs_line_fig(dv, unit), width="stretch", config=cfgc, key="cmb_line")
 
     elif view == "Grading":
         o0, o1, o2, _ = st.columns([2.2, 2.4, 2.4, 1.6])
