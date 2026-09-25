@@ -2614,7 +2614,8 @@ def pl_dual_fig(l: pd.Series, r: pd.Series, title: str, l_name: str, r_name: str
 
 
 def pl_scatter_fig(x: pd.Series, y: pd.Series, title: str, x_title: str, y_title: str, fmt: str = "%d %b %Y",
-                   height: int = 420) -> go.Figure:
+                   size: int = 560) -> go.Figure:
+    """Square scatter with a least-squares line; the latest point is green."""
     d = pd.concat([x.rename("x"), y.rename("y")], axis=1).dropna()
     slope, icpt = np.polyfit(d["x"].values, d["y"].values, 1)
     r = float(np.corrcoef(d["x"].values, d["y"].values)[0, 1])
@@ -2627,109 +2628,61 @@ def pl_scatter_fig(x: pd.Series, y: pd.Series, title: str, x_title: str, y_title
     fig.add_trace(go.Scatter(x=[d["x"].iloc[-1]], y=[d["y"].iloc[-1]], mode="markers",
                              marker=dict(size=10, color=GREEN, line=dict(color="#111111", width=1)),
                              hovertemplate=f"{lab[-1]}<br>x %{{x:,.1f}} | y %{{y:,.2f}}<extra></extra>"))
-    chart_layout(fig, f"{title} | correlation {r:+.2f}, R2 {r * r:.2f}, n {len(d):,}", height)
-    fig.update_layout(showlegend=False, hovermode="closest",
+    chart_layout(fig, f"<b>{title}</b><br><sup>correlation {r:+.2f}, R2 {r * r:.2f}, n {len(d):,}</sup>", size)
+    fig.update_layout(width=size, height=size, showlegend=False, hovermode="closest", margin=dict(t=64, b=8, l=8, r=8),
                       xaxis=dict(title=x_title, tickformat=",", zeroline=True, zerolinecolor="#9aa3b8"),
                       yaxis=dict(title=y_title, zeroline=True, zerolinecolor="#9aa3b8"))
     return fig
 
 
-def pl_seasonal_fig(s: pd.Series, title: str, y_title: str, n_years=5, height: int = 380) -> go.Figure:
-    """Monthly Series (PeriodIndex) by calendar year. The latest year (navy) and the year before (red) are lines; the
-    other years in the chosen window form the P10-P90 and P25-P75 bands and the dotted average."""
-    per = s.index
-    tbl = pd.DataFrame({"v": s.values.astype(float), "y": per.year, "mo": per.month}).pivot_table(index="mo", columns="y", values="v")
-    tbl = tbl.reindex(range(1, 13))
+def pl_seasonal_daily_fig(s: pd.Series, title: str, y_title: str, n_years=5, height: int = 400) -> go.Figure:
+    """Daily Series by calendar day. Latest year navy, previous year red; the other years of the window give the
+    P10-P90 and P25-P75 bands and the dotted average (short gaps carried forward, bands lightly smoothed)."""
+    d = s.dropna()
+    d = d[~((d.index.month == 2) & (d.index.day == 29))]
+    doy = d.index.dayofyear - ((d.index.is_leap_year) & (d.index.dayofyear > 60)).astype(int)
+    tbl = pd.DataFrame({"v": d.values.astype(float), "y": d.index.year, "doy": doy}).pivot_table(
+        index="doy", columns="y", values="v", aggfunc="last").reindex(range(1, 366))
     yrs = sorted(tbl.columns)
     win = yrs[-n_years:] if n_years else yrs
     cur = win[-1]
     prev = win[-2] if len(win) > 1 else None
-    hist = tbl[[y for y in win if y != cur]]
-    xl = MONTH_ABBR
+    filled = tbl[win].ffill(limit=10)
+    filled.loc[filled.index > tbl[cur].last_valid_index(), cur] = np.nan
+    hist = filled[[y for y in win if y != cur]]
+    xs = pd.Timestamp("2001-01-01") + pd.to_timedelta(np.arange(365), unit="D")
+    smooth = lambda z: z.rolling(7, center=True, min_periods=1).mean().values
     fig = go.Figure()
     if hist.shape[1] >= 3:
         for lo, hi, color, name in ((0.10, 0.90, "rgba(31,138,156,0.16)", "P10-P90"), (0.25, 0.75, "rgba(31,138,156,0.30)", "P25-P75")):
-            fig.add_trace(go.Scatter(x=xl, y=hist.quantile(hi, axis=1), mode="lines", line=dict(width=0), showlegend=False, hoverinfo="skip"))
-            fig.add_trace(go.Scatter(x=xl, y=hist.quantile(lo, axis=1), mode="lines", line=dict(width=0), fill="tonexty",
+            fig.add_trace(go.Scatter(x=xs, y=smooth(hist.quantile(hi, axis=1)), mode="lines", line=dict(width=0), showlegend=False, hoverinfo="skip"))
+            fig.add_trace(go.Scatter(x=xs, y=smooth(hist.quantile(lo, axis=1)), mode="lines", line=dict(width=0), fill="tonexty",
                                      fillcolor=color, name=name, hoverinfo="skip"))
-        fig.add_trace(go.Scatter(x=xl, y=hist.mean(axis=1), mode="lines", name="Average", line=dict(color="#4a5578", width=1.5, dash="dot"),
+        fig.add_trace(go.Scatter(x=xs, y=smooth(hist.mean(axis=1)), mode="lines", name="Average", line=dict(color="#4a5578", width=1.5, dash="dot"),
                                  hovertemplate="%{y:,.1f}<extra>Average</extra>"))
-    for y, col, w in ((prev, RED, 2), (cur, NAVY, 3)):
+    for y, col, w in ((prev, RED, 1.8), (cur, NAVY, 2.6)):
         if y is not None:
-            fig.add_trace(go.Scatter(x=xl, y=tbl[y], mode="lines+markers", name=str(y), connectgaps=False, line=dict(color=col, width=w),
-                                     marker=dict(size=4), hovertemplate="%{y:,.1f}<extra>" + str(y) + "</extra>"))
+            fig.add_trace(go.Scatter(x=xs, y=filled[y].values, mode="lines", name=str(y), connectgaps=False, line=dict(color=col, width=w),
+                                     hovertemplate="%{y:,.1f}<extra>" + str(y) + "</extra>"))
     rng = f"{win[0]}-{win[-1] - 1}" if len(win) > 1 else str(win[0])
     chart_layout(fig, f"{title} | bands from {rng}", height)
-    fig.update_layout(yaxis=dict(title=y_title, tickformat=","), legend=dict(font=dict(size=10)))
+    fig.update_layout(yaxis=dict(title=y_title, tickformat=","), xaxis=dict(tickformat="%b", dtick="M1"), legend=dict(font=dict(size=10)))
     return fig
-
-
-def pl_bucket_edges(comm: str, df: pd.DataFrame) -> list:
-    if comm == "KC":                     # stocks column is in 000s of bags
-        return [0, 100, 250, 500, 1000, 1500, 2000, 3000, np.inf]
-    q = (df["stocks"].quantile(np.linspace(0, 1, 8)[1:-1]) / 500).round() * 500
-    return [0] + sorted(set(float(v) for v in q if v > 0)) + [np.inf]
-
-
-def pl_bucket_label(comm: str, lo: float, hi: float) -> str:
-    if comm == "KC":
-        return f"< {hi:,.0f}k" if lo == 0 else (f"> {lo:,.0f}k" if hi == np.inf else f"{lo:,.0f}-{hi:,.0f}k")
-    return f"< {hi:,.0f}" if lo == 0 else (f"> {lo:,.0f}" if hi == np.inf else f"{lo:,.0f}-{hi:,.0f}")
-
-
-def pl_buckets(comm: str, df: pd.DataFrame):
-    """Monthly (spread, stocks) frame -> per-bucket stats table html, box figure, current bucket label."""
-    edges = pl_bucket_edges(comm, df)
-    labels = [pl_bucket_label(comm, edges[i], edges[i + 1]) for i in range(len(edges) - 1)]
-    d = df.copy()
-    d["bucket"] = pd.cut(d["stocks"], bins=edges, labels=labels, right=False)
-    cur = d.iloc[-1]
-    hist = d.iloc[:-1]
-    rows = []
-    for lb in labels:
-        v = hist.loc[hist["bucket"] == lb, "spread"]
-        rows.append((lb, len(v), v.mean() if len(v) else np.nan, v.median() if len(v) else np.nan,
-                     v.quantile(0.1) if len(v) else np.nan, v.quantile(0.9) if len(v) else np.nan,
-                     v.min() if len(v) else np.nan, v.max() if len(v) else np.nan))
-    f1 = lambda x: "" if pd.isna(x) else f"{x:,.1f}"
-    out = ["<div class='rwrap' style='height:auto'><table class='rpt cmp'><thead><tr class='h2'>",
-           "<th class='dt'>Cert stocks bucket</th><th>Months</th><th>Average</th><th>Median</th><th>P10</th><th>P90</th>"
-           "<th>Min</th><th>Max</th></tr></thead><tbody>"]
-    for lb, n, mean, med, p10, p90, mn, mx in rows:
-        is_cur = lb == cur["bucket"]
-        style = " style='background:rgba(31,157,111,0.14);font-weight:700'" if is_cur else ""
-        out.append(f"<tr{style}><td class='d'>{lb}{' (current)' if is_cur else ''}</td><td>{n}</td><td>{f1(mean)}</td>"
-                   f"<td>{f1(med)}</td><td>{f1(p10)}</td><td>{f1(p90)}</td><td>{f1(mn)}</td><td>{f1(mx)}</td></tr>")
-    out.append("</tbody></table></div>")
-    fig = go.Figure()
-    for lb in labels:
-        v = hist.loc[hist["bucket"] == lb, "spread"]
-        if len(v):
-            fig.add_trace(go.Box(y=v, name=lb, marker_color="#2f78b7", line=dict(color="#2f78b7"), boxpoints="outliers",
-                                 hovertemplate="%{y:,.1f}<extra>" + lb + "</extra>"))
-    fig.add_trace(go.Scatter(x=[cur["bucket"]], y=[cur["spread"]], mode="markers+text", text=[f"{cur.name.strftime('%b-%y')}"],
-                             textposition="top center", marker=dict(symbol="diamond", size=13, color=GREEN, line=dict(color="#111111", width=1)),
-                             hovertemplate=f"{cur.name.strftime('%b-%y')} (month to date)<br>%{{y:,.1f}}<extra></extra>"))
-    chart_layout(fig, "Spread by cert-stock bucket (months in that bucket; current month marked)", 400)
-    fig.update_layout(showlegend=False, hovermode="closest", xaxis=dict(title="Cert stocks bucket" + (" (000s bags)" if comm == "KC" else " (lots)")),
-                      yaxis=dict(title=f"1/2 Spread ({PL_CFG[comm]['price_unit']})", zeroline=True, zerolinecolor="#9aa3b8"))
-    pct = float((hist.loc[hist["bucket"] == cur["bucket"], "spread"] <= cur["spread"]).mean() * 100) if (hist["bucket"] == cur["bucket"]).any() else np.nan
-    return "".join(out), fig, cur, pct
 
 
 def render_price_link(comm: str, pl: pd.DataFrame, series: dict, frame_fn) -> None:
     """Price Link tab body, shared by Arabica (KC) and Robusta (RC). frame_fn(freq) -> spread/stocks frame."""
     cfg = PL_CFG[comm]
-    views = ["Spread vs Certs", "Certs vs Price", "Certs Change vs Price", "Usage vs Price"]
+    views = ["Spread vs Certs", "Certs vs Price", "Usage vs Price"]
     if comm == "KC":
         views.append("Pending vs Spread")
-    views += ["Stocks Buckets", "Seasonal"]
+    views.append("Seasonal")
     with st.container(key="rc_view_box"):
         view = st.radio("View", views, horizontal=True, label_visibility="collapsed", key=f"pl{comm}_view")
     st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
     cfgc = {"displayModeBar": False}
     certs = series["certs"]
-    p = comm.lower()
+    spread = pl["spread_c12"].dropna()
 
     if view == "Spread vs Certs":
         c1, _ = st.columns([1.4, 4])
@@ -2744,116 +2697,97 @@ def render_price_link(comm: str, pl: pd.DataFrame, series: dict, frame_fn) -> No
         st.plotly_chart(fig, width="stretch", config=cfgc, key=f"pl{comm}_chart1")
 
     elif view == "Certs vs Price":
-        span = pl_span_radio(f"pl{comm}_span2")
-        start = pl_start(span, certs.index.max())
-        cw = _since(certs, start)
-        px, sp = _since(pl["c1"].dropna(), cw.index.min()), _since(pl["spread_c12"].dropna(), cw.index.min())
-        pl_section("Certified stocks and C1 price", f"Certified stocks ({cfg['stock_unit']}, left axis) against the front-month price "
-                   f"({cfg['price_unit']}, right axis).")
-        st.plotly_chart(pl_dual_fig(cw, px, f"{cfg['name']} certified stocks vs C1 price", "Certs", "C1", cfg["stock_lbl"],
-                                    f"C1 ({cfg['price_unit']})"), width="stretch", config=cfgc, key=f"pl{comm}_c1")
-        pl_section("Certified stocks and 1/2 spread", f"Same stocks against C1 minus C2 ({cfg['price_unit']}). Spikes near contract expiry "
-                   "are the delivery-month effect of the continuation.")
-        st.plotly_chart(pl_dual_fig(cw, sp, f"{cfg['name']} certified stocks vs 1/2 spread", "Certs", "C1 - C2", cfg["stock_lbl"],
-                                    f"1/2 spread ({cfg['price_unit']})"), width="stretch", config=cfgc, key=f"pl{comm}_c2")
-
-    elif view == "Certs Change vs Price":
         k1, k2, _ = st.columns([1.6, 1.6, 3])
         with k1:
-            span = pl_span_radio(f"pl{comm}_span3")
+            span = pl_span_radio(f"pl{comm}_span2", "All")
         with k2:
-            st.markdown("<div class='sb-label' style='margin:0 0 2px'>Change over (days)</div>", unsafe_allow_html=True)
+            st.markdown("<div class='sb-label' style='margin:0 0 2px'>Scatter change over (days)</div>", unsafe_allow_html=True)
             h = st.radio("Horizon", [1, 5, 20], index=1, horizontal=True, label_visibility="collapsed", key=f"pl{comm}_h")
-        base = pd.concat([certs.rename("c"), pl["rollex_px"].rename("px")], axis=1).dropna()
-        base = _since(base, pl_start(span, base.index.max()))
-        pl_section(f"Certs change vs price return, {h}-day", "Each dot is one day: change in certified stocks over the horizon "
-                   "against the roll-adjusted price return over the same horizon (%). Green is the latest day.")
-        st.plotly_chart(pl_scatter_fig(base["c"].diff(h), base["px"].pct_change(h) * 100,
-                                       f"{cfg['name']} certs change ({cfg['stock_unit']}) vs return (%)", f"Certs change over {h}d ({cfg['stock_unit']})",
-                                       f"Price return over {h}d (%)"), width="stretch", config=cfgc, key=f"pl{comm}_sc")
-        dc1, r1 = base["c"].diff(), base["px"].pct_change() * 100
-        ks = list(range(-10, 11))
-        cor = [dc1.corr(r1.shift(-k)) for k in ks]
-        pl_section("Lead and lag", "Correlation of today's 1-day certs change with the price return k days later "
-                   "(k above 0: certs lead price, k below 0: price leads certs).")
-        lf = go.Figure(go.Bar(x=ks, y=cor, marker_color=[NAVY if k == 0 else "#6b7fb5" for k in ks],
-                              hovertemplate="k %{x}: %{y:+.3f}<extra></extra>"))
-        chart_layout(lf, "Correlation by lead / lag (days)", 320)
-        lf.update_layout(showlegend=False, xaxis=dict(title="k (days)", dtick=1), yaxis=dict(title="Correlation", zeroline=True, tickformat=".2f"))
-        st.plotly_chart(lf, width="stretch", config=cfgc, key=f"pl{comm}_lag")
-        pl_section("Rolling correlation", "60-observation rolling correlation of the 1-day certs change with the 1-day price return.")
-        rf = go.Figure(go.Scatter(x=base.index, y=dc1.rolling(60).corr(r1), mode="lines", line=dict(color=NAVY, width=1.8),
-                                  hovertemplate="%{y:+.2f}<extra></extra>"))
-        chart_layout(rf, "Rolling 60-day correlation: certs change vs price return", 320)
-        rf.update_layout(showlegend=False, yaxis=dict(title="Correlation", zeroline=True, tickformat=".2f"))
-        st.plotly_chart(rf, width="stretch", config=cfgc, key=f"pl{comm}_roll")
+        start = pl_start(span, certs.index.max())
+        cw = _since(certs, start)
+        px, sp = _since(pl["c1"].dropna(), cw.index.min()), _since(spread, cw.index.min())
+        pl_section("Certified stocks and C1 price")
+        st.plotly_chart(pl_dual_fig(cw, px, f"{cfg['name']} certified stocks vs C1 price", "Certs", "C1", cfg["stock_lbl"],
+                                    f"C1 ({cfg['price_unit']})"), width="stretch", config=cfgc, key=f"pl{comm}_c1")
+        pl_section("Certified stocks and 1/2 spread")
+        st.plotly_chart(pl_dual_fig(cw, sp, f"{cfg['name']} certified stocks vs 1/2 spread", "Certs", "C1 - C2", cfg["stock_lbl"],
+                                    f"1/2 spread ({cfg['price_unit']})"), width="stretch", config=cfgc, key=f"pl{comm}_c2")
+        pl_section("Certs change vs price return")
+        base = _since(pd.concat([certs.rename("c"), pl["rollex_px"].rename("px")], axis=1).dropna(), cw.index.min())
+        st.plotly_chart(pl_scatter_fig(base["c"].diff(h), base["px"].pct_change(h) * 100, f"{cfg['name']} certs change vs return, {h}d",
+                                       f"Certs change ({cfg['stock_unit']})", "Price return (%)"), width="content", config=cfgc, key=f"pl{comm}_sc")
 
     elif view == "Usage vs Price":
-        span = pl_span_radio(f"pl{comm}_span4", "5Y")
         u = series["usage"].dropna()
+        t0 = u.index.min()
         um = u.groupby(u.index.to_period("M")).sum()
         avg = certs.groupby(certs.index.to_period("M")).mean()
         upct = um / avg.reindex(um.index) * 100
-        c1m = pl["c1"].dropna().groupby(pl["c1"].dropna().index.to_period("M")).mean()
-        spm = pl["spread_c12"].dropna().groupby(pl["spread_c12"].dropna().index.to_period("M")).mean()
-        start = pl_start(span, um.index.max().to_timestamp())
-        cut = (lambda s: s if start is None else s[s.index.to_timestamp() >= start])
-        um, upct, c1m, spm = cut(um), cut(upct), cut(c1m), cut(spm)
-        pl_section("Monthly usage and C1 price", f"Usage = graded {cfg['stock_unit']} minus the change in certified stocks"
-                   f"{' (same day)' if comm == 'KC' else ' (1-day lag)'}, summed by month, against the monthly average C1.")
+        c1s = pl["c1"].dropna()
+        c1m = c1s[c1s.index >= t0].groupby(c1s[c1s.index >= t0].index.to_period("M")).mean()
+        spm = spread[spread.index >= t0].groupby(spread[spread.index >= t0].index.to_period("M")).mean()
+        pl_section("Monthly usage and C1 price")
         st.plotly_chart(pl_dual_fig(_mstamp(um), _mstamp(c1m), f"{cfg['name']} monthly usage vs C1", "Usage", "C1", f"Usage ({cfg['stock_unit']})",
                                     f"C1 ({cfg['price_unit']})", "bar"), width="stretch", config=cfgc, key=f"pl{comm}_u1")
-        pl_section("Usage rate and 1/2 spread", "Usage as a percentage of the month's average certified stocks, against the monthly average spread.")
+        pl_section("Usage rate and 1/2 spread")
         st.plotly_chart(pl_dual_fig(_mstamp(upct), _mstamp(spm), f"{cfg['name']} usage % of stocks vs 1/2 spread", "Usage %", "C1 - C2",
                                     "Usage (% of certs)", f"1/2 spread ({cfg['price_unit']})", "bar"), width="stretch", config=cfgc, key=f"pl{comm}_u2")
-        pl_section("Usage rate against spread", "Each dot is a month.")
-        st.plotly_chart(pl_scatter_fig(upct, spm, f"{cfg['name']} usage % vs 1/2 spread", "Usage (% of average certs)",
-                                       f"1/2 spread ({cfg['price_unit']})", "%b-%y"), width="stretch", config=cfgc, key=f"pl{comm}_u3")
+        pl_section("Usage rate vs spread")
+        f1, _ = st.columns([1.4, 4])
+        with f1:
+            st.markdown("<div class='sb-label' style='margin:0 0 2px'>Frequency</div>", unsafe_allow_html=True)
+            ufreq = st.radio("Usage frequency", ["Daily", "Monthly"], horizontal=True, label_visibility="collapsed", key=f"pl{comm}_ufreq")
+        if ufreq == "Daily":
+            lvl = certs.reindex(u.index)
+            xs_, ys_ = (u / lvl * 100), spread.reindex(u.index)
+            fmt = "%d %b %Y"
+        else:
+            xs_, ys_ = upct, spm
+            fmt = "%b-%y"
+        st.plotly_chart(pl_scatter_fig(xs_, ys_, f"{cfg['name']} usage % vs 1/2 spread ({ufreq.lower()})", "Usage (% of certs)",
+                                       f"1/2 spread ({cfg['price_unit']})", fmt), width="content", config=cfgc, key=f"pl{comm}_u3")
 
     elif view == "Pending vs Spread":
-        span = pl_span_radio(f"pl{comm}_span5")
+        span = pl_span_radio(f"pl{comm}_span5", "All")
         pend = series["pending"]
         pend = _since(pend, pl_start(span, pend.index.max()))
-        sp = _since(pl["spread_c12"].dropna(), pend.index.min())
-        pl_section("Pending queue and 1/2 spread", "Bags waiting to be graded (left axis) against C1 minus C2 (right axis).")
+        sp = _since(spread, pend.index.min())
+        pl_section("Pending queue and 1/2 spread")
         st.plotly_chart(pl_dual_fig(pend, sp, "KC pending grading queue vs 1/2 spread", "Pending", "C1 - C2", "Pending (bags)",
                                     "1/2 spread (c/lb)"), width="stretch", config=cfgc, key=f"pl{comm}_p1")
         fr = series["fresh"].dropna()
         frm = fr.groupby(fr.index.to_period("M")).sum()
-        spm = pl["spread_c12"].dropna().groupby(pl["spread_c12"].dropna().index.to_period("M")).mean()
+        spm = spread.groupby(spread.index.to_period("M")).mean()
         start = pl_start(span, frm.index.max().to_timestamp())
-        cut = (lambda s: s if start is None else s[s.index.to_timestamp() >= start])
-        pl_section("Fresh pending and 1/2 spread", "Fresh Pending = change in the pending queue plus Passed plus Failed, summed by month "
-                   "(new coffee entering the grading queue), against the monthly average spread.")
+        cut = (lambda z: z if start is None else z[z.index.to_timestamp() >= start])
+        pl_section("Fresh pending and 1/2 spread")
         st.plotly_chart(pl_dual_fig(_mstamp(cut(frm)), _mstamp(cut(spm)), "KC monthly fresh pending vs 1/2 spread", "Fresh pending", "C1 - C2",
                                     "Fresh pending (bags)", "1/2 spread (c/lb)", "bar"), width="stretch", config=cfgc, key=f"pl{comm}_p2")
-
-    elif view == "Stocks Buckets":
-        df = frame_fn("Monthly")
-        html, fig, cur, pct = pl_buckets(comm, df)
-        pl_section("Spread by certified-stock bucket", "Months are grouped by end-of-month certified stocks. For each bucket the table shows how "
-                   "the monthly average 1/2 spread has behaved; the current (month-to-date) reading is not in the statistics.")
-        st.markdown(html, unsafe_allow_html=True)
-        pos = "" if pd.isna(pct) else f" That is the {pct:.0f}th percentile of that bucket's history."
-        st.markdown(f"<div class='card-desc' style='margin-top:8px'>Current: {cur.name.strftime('%b-%y')} spread {cur['spread']:,.1f} "
-                    f"{cfg['price_unit']} with certified stocks of {cur['stocks']:,.0f}{'k bags' if comm == 'KC' else ' lots'}, bucket "
-                    f"{cur['bucket']}.{pos}</div>", unsafe_allow_html=True)
-        st.plotly_chart(fig, width="stretch", config=cfgc, key=f"pl{comm}_bx")
+        pl_section("Pending vs spread, Fresh pending vs spread change")
+        pw = series["pending"]
+        pw = _since(pw, pend.index.min())
+        sp_d = spread.reindex(pw.index)
+        fw = _since(series["fresh"], pend.index.min())
+        d_sp = spread.reindex(fw.index).diff()
+        sc1, sc2, _ = st.columns([1, 1, 0.3])
+        with sc1:
+            st.plotly_chart(pl_scatter_fig(pw, sp_d, "KC pending vs 1/2 spread", "Pending (bags)", "1/2 spread (c/lb)", size=520),
+                            width="content", config=cfgc, key=f"pl{comm}_psc1")
+        with sc2:
+            st.plotly_chart(pl_scatter_fig(fw, d_sp, "KC fresh pending vs spread change", "Fresh pending (bags)", "1/2 spread change (c/lb)", size=520),
+                            width="content", config=cfgc, key=f"pl{comm}_psc2")
 
     else:   # Seasonal
-        df = frame_fn("Monthly")
         sm1, _ = st.columns([2.4, 4])
         with sm1:
             st.markdown("<div class='sb-label' style='margin:0 0 2px'>Period for the bands</div>", unsafe_allow_html=True)
             sper = st.radio("Period", ["5Y", "10Y", "15Y", "All"], index=0, horizontal=True, label_visibility="collapsed", key=f"pl{comm}_sper")
         n = None if sper == "All" else int(sper[:-1])
-        pl_section("Seasonal 1/2 spread", "Monthly average spread by calendar year. Latest year in navy, previous year in red; the shaded bands "
-                   "are the P10-P90 and P25-P75 range of the earlier years in the period, the dotted line is their average.")
-        st.plotly_chart(pl_seasonal_fig(df["spread"], f"{cfg['name']} 1/2 spread", f"1/2 spread ({cfg['price_unit']})", n),
+        pl_section("Seasonal 1/2 spread")
+        st.plotly_chart(pl_seasonal_daily_fig(spread, f"{cfg['name']} 1/2 spread", f"1/2 spread ({cfg['price_unit']})", n),
                         width="stretch", config=cfgc, key=f"pl{comm}_s1")
-        pl_section("Seasonal certified stocks", "End-of-month certified stocks by calendar year, same bands.")
-        stocks = df["stocks"] * (1000 if comm == "KC" else 1)
-        st.plotly_chart(pl_seasonal_fig(stocks, f"{cfg['name']} certified stocks", f"Certs ({cfg['stock_unit']})", n),
+        pl_section("Seasonal certified stocks")
+        st.plotly_chart(pl_seasonal_daily_fig(certs, f"{cfg['name']} certified stocks", f"Certs ({cfg['stock_unit']})", n),
                         width="stretch", config=cfgc, key=f"pl{comm}_s2")
 
 
