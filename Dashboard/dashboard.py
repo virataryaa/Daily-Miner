@@ -796,9 +796,11 @@ def monthly_lots_html(g: pd.DataFrame, m: int = 1) -> str:
 @st.cache_data(ttl=3600, show_spinner=False)
 def monthly_grading_certs_html(gr: pd.DataFrame, certs: pd.DataFrame, grade: str = "VG",
                                height: str = "60vh") -> str:
-    """One row per calendar month: grading lots by origin on the left, LRC total certs change
-    on the right - a single Month column shared by both blocks, so they line up."""
-    lots = gr.groupby([gr["PanelDate"].dt.to_period("M"), "Origin2"])["NoLots"].sum().unstack(fill_value=0)
+    """One row per calendar month, capped to the grading feed's own range (it starts Jan 2022;
+    certs go back to 2008 but there is nothing to grade-compare before grading itself exists).
+    Every origin gets its own column (lots), LRC total certs change (bags) sits alongside it,
+    both sharing a single Month column so the rows line up."""
+    lots = gr.groupby([gr["PanelDate"].dt.to_period("M"), "OriginName"])["NoLots"].sum().unstack(fill_value=0)
     lots_tot = lots.sum(axis=1)
     origins = list(lots.sum().sort_values(ascending=False).index)
 
@@ -807,7 +809,8 @@ def monthly_grading_certs_html(gr: pd.DataFrame, certs: pd.DataFrame, grade: str
     chg = me.ffill().diff().dropna()
     chg.index = chg.index.to_period("M")
 
-    months = sorted(set(lots_tot.index) | set(chg.index), reverse=True)
+    g_start = gr["PanelDate"].min().to_period("M")
+    months = sorted([p for p in (set(lots_tot.index) | set(chg.index)) if p >= g_start], reverse=True)
     if not months:
         return "<div class='rwrap' style='padding:14px'>No data.</div>"
     l_scale = max(lots_tot.max(), 1)
@@ -832,7 +835,8 @@ def monthly_grading_certs_html(gr: pd.DataFrame, certs: pd.DataFrame, grade: str
         cls = "pos" if v > 0 else "neg" if v < 0 else ""
         return f"<td class='cb sep'>{bar}<span class='{cls}'>{v:+,}</span></td>"
 
-    head = ["<div class='rwrap' style='height:", height, "'><table class='rpt'><thead>",
+    head = ["<div class='mt' style='margin-bottom:4px'>Grading (lots) & LRC Certified Stocks Change (bags), by month</div>",
+            "<div class='rwrap' style='height:", height, "'><table class='rpt'><thead>",
             "<tr class='h1'><th class='dt' rowspan='2'>Month</th>",
             f"<th colspan='{len(origins) + 1}'>Lots Graded by Origin</th>",
             "<th colspan='1' class='sep'>LRC Certs</th></tr><tr class='h2'>"]
