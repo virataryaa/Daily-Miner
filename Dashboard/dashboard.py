@@ -1772,8 +1772,8 @@ def kc_gr_pending_combo_fig(g: pd.DataFrame, days: pd.Series, origins: tuple, po
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def kc_gr_month_pf(g: pd.DataFrame, days: pd.Series, origin: str, port: str) -> pd.DataFrame:
-    """Monthly Passed and Failed bags for one origin (or all) at one port (or all)."""
+def kc_gr_day_pf(g: pd.DataFrame, days: pd.Series, origin: str, port: str) -> pd.DataFrame:
+    """Daily Passed and Failed bags for one origin (or all) at one port (or all)."""
     days = pd.DatetimeIndex(days)
     out = {}
     for tag in ("Passed", "Failed"):
@@ -1782,23 +1782,29 @@ def kc_gr_month_pf(g: pd.DataFrame, days: pd.Series, origin: str, port: str) -> 
             s = s[s["Origin"] == origin]
         if port != "Total Ports":
             s = s[s["Port"] == port]
-        d = s.groupby("Date")["Bags"].sum().reindex(days, fill_value=0)
-        out[tag] = d.groupby(d.index.to_period("M")).sum()
+        out[tag] = s.groupby("Date")["Bags"].sum().reindex(days, fill_value=0)
     return pd.DataFrame(out)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def kc_gr_month_pf(g: pd.DataFrame, days: pd.Series, origin: str, port: str) -> pd.DataFrame:
+    """Monthly Passed and Failed bags for one origin (or all) at one port (or all)."""
+    d = kc_gr_day_pf(g, pd.Series(days), origin, port)
+    return d.groupby(d.index.to_period("M")).sum()
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def kc_gr_rate_line_fig(mf: pd.DataFrame, title: str, height: int = 320) -> go.Figure:
     tot = (mf["Passed"] + mf["Failed"]).replace(0, np.nan)
     rate = mf["Passed"] / tot * 100
-    xs = mf.index.to_timestamp()
+    xs = mf.index
     fig = go.Figure()
     avg = float(mf["Passed"].sum() / max(mf["Passed"].sum() + mf["Failed"].sum(), 1) * 100)
     fig.add_hline(y=avg, line=dict(color=GREY, width=1, dash="dot"),
                   annotation_text=f"Overall {avg:.0f}%", annotation_position="top left",
                   annotation_font=dict(size=10, color=GREY))
-    fig.add_trace(go.Scatter(x=xs, y=rate, mode="lines+markers", line=dict(color=NAVY, width=2.4),
-                             marker=dict(size=6, color=NAVY), connectgaps=False,
+    fig.add_trace(go.Scatter(x=xs, y=rate, mode="lines+markers", line=dict(color=NAVY, width=1.6),
+                             marker=dict(size=4, color=NAVY), connectgaps=True,
                              hovertemplate="%{y:.1f}%<extra>Pass rate</extra>"))
     chart_layout(fig, title, height)
     fig.update_layout(yaxis=dict(ticksuffix="%", range=[0, 102]), showlegend=False)
@@ -2372,7 +2378,9 @@ if commodity == "Coffee":
                                         label_visibility="collapsed", key="arr_port")
                 mf = kc_gr_month_pf(g, gdays, r_or, r_po)
                 lbl = f"{r_or} at {r_po}"
-                st.plotly_chart(kc_gr_rate_line_fig(mf, f"Pass Rate by Month | {lbl}"), width="stretch", config=gcfg)
+                st.plotly_chart(kc_gr_rate_line_fig(kc_gr_day_pf(g, gdays, r_or, r_po),
+                                                    f"Pass Rate by Day | {lbl} (days with grading)"),
+                                width="stretch", config=gcfg)
                 st.plotly_chart(kc_gr_pf_bars_fig(mf, f"Passed / Failed Bags by Month | {lbl}"),
                                 width="stretch", config=gcfg)
                 st.plotly_chart(kc_gr_pf_bars_fig(mf, f"Passed / Failed Proportion by Month | {lbl}", proportion=True),
